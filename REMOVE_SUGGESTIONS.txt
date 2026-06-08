@@ -1,0 +1,15 @@
+Suggested files to remove or archive (review before deleting):
+
+- index_modern_saas_complete.html            # likely demo/unused
+- DEMO_QUICK_START.md                       # demo documentation
+- README_REPLACE.txt                         # leftover README variant
+- SampleCSV.csv, demo1.csv, test.csv         # sample/test CSV files (keep one canonical)
+- foreign_numbers_msg91.csv, indian_numbers_msg91.csv
+- INSTALL_AND_MAINTENANCE_GUIDE.md (optional)
+
+Recommended safe approach:
+1. Create a branch: `git checkout -b cleanup/legacy-files`
+2. Move files to `legacy/` instead of deleting: `mkdir legacy && git mv index_modern_saas_complete.html legacy/`
+3. Commit and open PR for review.
+
+Do NOT delete `webhook-server.js` or `main_mongodb_no_report_sync.js` unless you are certain Electron and existing deployment flows no longer rely on them — they currently act as shims/backwards-compatible entrypoints.

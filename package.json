@@ -1,0 +1,10 @@
+{
+  "name": "webhook-msg91",
+  "version": "0.1.0",
+  "main": "src/framework/server.js",
+  "scripts": {
+    "start": "node src/framework/server.js",
+    "validate": "node validate.js",
+    "test": "node test/run-tests.js"
+  }
+}
