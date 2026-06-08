@@ -5,7 +5,7 @@ const {
   Menu,
   Tray,
   ipcMain,
-  nativeImage,
+  nativeImage, session,
 } = require("electron");
 const path = require("path");
 const fs = require("fs");
@@ -15,8 +15,25 @@ const express = require("express");
 const XLSX = require("xlsx");
 const { MongoClient } = require("mongodb");
 const nodemailer = require("nodemailer");
-const SftpClient = require("ssh2-sftp-client");
+let SftpClient = null;
+try {
+  SftpClient = require("ssh2-sftp-client");
+} catch (_) {
+  SftpClient = null;
+}
 // const { ipcMain } = require("electron");
+
+
+app.whenReady().then(() => {
+  // Clear cache for the default session
+  session.defaultSession.clearCache()
+    .then(() => {
+      console.log('HTTP cache cleared successfully.');
+    })
+    .catch((err) => {
+      console.error('Failed to clear cache:', err);
+    });
+});
 
 function getExternalConfigPaths(fileName) {
   const paths = [
@@ -358,6 +375,11 @@ async function sendRmGroupedReportsDirect(filters = {}) {
 }
 
 async function deliverFileBySftp(filePath) {
+  if (!SftpClient) {
+    throw new Error(
+      "SFTP is not installed. Use email/export delivery or install ssh2-sftp-client.",
+    );
+  }
   const host = process.env.SFTP_HOST;
   if (!host) throw new Error("SFTP_HOST not configured");
   const client = new SftpClient();
@@ -1797,18 +1819,16 @@ async function insertUploadDoc(upload) {
   };
   const { createdAt: uploadCreatedAt, ...uploadSetDoc } = doc;
 
-  await mongoDb
-    .collection("whatsapp_uploads")
-    .updateOne(
-      { uploadId: id },
-      {
-        $set: uploadSetDoc,
-        $setOnInsert: {
-          createdAt: uploadCreatedAt || new Date().toISOString(),
-        },
+  await mongoDb.collection("whatsapp_uploads").updateOne(
+    { uploadId: id },
+    {
+      $set: uploadSetDoc,
+      $setOnInsert: {
+        createdAt: uploadCreatedAt || new Date().toISOString(),
       },
-      { upsert: true },
-    );
+    },
+    { upsert: true },
+  );
   return makeRunResult(id, 1);
 }
 
@@ -1830,16 +1850,14 @@ async function insertNumberDoc(number) {
   };
   const { createdAt: numberCreatedAt, ...numberSetDoc } = doc;
 
-  await mongoDb
-    .collection("whatsapp_numbers")
-    .updateOne(
-      { uploadId: doc.uploadId, numberId: id },
-      {
-        $set: numberSetDoc,
-        $setOnInsert: { createdAt: numberCreatedAt || now },
-      },
-      { upsert: true },
-    );
+  await mongoDb.collection("whatsapp_numbers").updateOne(
+    { uploadId: doc.uploadId, numberId: id },
+    {
+      $set: numberSetDoc,
+      $setOnInsert: { createdAt: numberCreatedAt || now },
+    },
+    { upsert: true },
+  );
   return makeRunResult(id, 1);
 }
 
@@ -1858,14 +1876,12 @@ async function updateUploadFields(uploadId, fields) {
 async function updateNumberFields(numberId, fields) {
   await requireMongoDb();
   const n = Number(numberId);
-  await mongoDb
-    .collection("whatsapp_numbers")
-    .updateOne(
-      { $or: [{ id: n }, { numberId: n }] },
-      {
-        $set: { ...compactObject(fields), updatedAt: new Date().toISOString() },
-      },
-    );
+  await mongoDb.collection("whatsapp_numbers").updateOne(
+    { $or: [{ id: n }, { numberId: n }] },
+    {
+      $set: { ...compactObject(fields), updatedAt: new Date().toISOString() },
+    },
+  );
   return makeRunResult(null, 1);
 }
 
@@ -2113,25 +2129,49 @@ function getTemplateFilterCandidates(value) {
   ];
 }
 
+function getDateFilterCandidates(filters = {}) {
+  const rawQuery = {};
+  const isoQuery = {};
+  if (filters.startDateTime) {
+    rawQuery.$gte = filters.startDateTime;
+    const start = new Date(filters.startDateTime);
+    if (!Number.isNaN(start.getTime())) isoQuery.$gte = start.toISOString();
+  }
+  if (filters.endDateTime) {
+    rawQuery.$lt = filters.endDateTime;
+    const end = new Date(filters.endDateTime);
+    if (!Number.isNaN(end.getTime())) isoQuery.$lt = end.toISOString();
+  }
+  return [rawQuery, isoQuery].filter((query) => Object.keys(query).length);
+}
+
+function addDateFieldConditions(query, fields, filters = {}) {
+  const dateQueries = getDateFilterCandidates(filters);
+  if (!dateQueries.length) return;
+  addReportOrCondition(
+    query,
+    fields.flatMap((field) =>
+      dateQueries.map((dateQuery) => ({ [field]: dateQuery })),
+    ),
+  );
+}
+
 async function listCustomReportRowsFromMongo(filters = {}) {
   await requireMongoDb();
   const query = {};
-  const dateQuery = {};
-  if (filters.startDateTime) dateQuery.$gte = filters.startDateTime;
-  if (filters.endDateTime) dateQuery.$lt = filters.endDateTime;
-  if (Object.keys(dateQuery).length) {
-    query.$or = [
-      { receivedAt: dateQuery },
-      { statusUpdatedAt: dateQuery },
-      { requestedAt: dateQuery },
-      { updatedAt: dateQuery },
-    ];
-  }
+  addDateFieldConditions(
+    query,
+    ["receivedAt", "statusUpdatedAt", "requestedAt", "updatedAt"],
+    filters,
+  );
   if (filters.eventType && filters.eventType !== "all")
     query.eventType = filters.eventType;
   if (filters.status && filters.status !== "all") {
-    if (filters.status === "inbound") query.eventType = "inbound";
-    else query.normalizedStatus = filters.status;
+    if (filters.status === "inbound") {
+      query.eventType = "inbound";
+    } else if (filters.eventType !== "inbound") {
+      query.normalizedStatus = filters.status;
+    }
   }
   if (filters.filteredNumberId && filters.filteredNumberId !== "all") {
     const sender = normalizeSenderFilterValue(filters.filteredNumberId);
@@ -2256,7 +2296,204 @@ async function listCustomReportRowsFromMongo(filters = {}) {
     };
   });
 
-  return rows.filter((row) => reportRowMatchesSearch(row, filters.search));
+  return rows.filter(
+    (row) =>
+      reportRowMatchesSearch(row, filters.search) &&
+      reportRowMatchesDateRange(row, filters),
+  );
+}
+
+async function listSenderReportRowsForCustomReport(filters = {}) {
+  await requireMongoDb();
+  const query = {};
+  addDateFieldConditions(query, ["sentAt", "updatedAt", "lastReplyAt"], filters);
+
+  if (filters.filteredNumberId && filters.filteredNumberId !== "all") {
+    const sender = normalizeSenderFilterValue(filters.filteredNumberId);
+    addReportOrCondition(query, [
+      { senderNumber: sender },
+      { integratedNumber: sender },
+      { integrated_number: sender },
+      { "responseDetails.integratedNumber": sender },
+      { "responseDetails.integrated_number": sender },
+    ]);
+  }
+
+  if (filters.templateName && filters.templateName !== "all") {
+    const candidates = getTemplateFilterCandidates(filters.templateName);
+    addReportOrCondition(
+      query,
+      candidates.flatMap((candidate) => [
+        { templateName: candidate },
+        { templateLabel: candidate },
+        { "responseDetails.templateName": candidate },
+        { "responseDetails.template_name": candidate },
+      ]),
+    );
+  }
+
+  const senderReports = await mongoDb
+    .collection("whatsapp_sender_reports")
+    .find(query)
+    .sort({ updatedAt: -1, sentAt: -1, _id: -1 })
+    .limit(5000)
+    .toArray();
+
+  const uploadIds = [
+    ...new Set(
+      senderReports.map((row) => Number(row.uploadId || 0)).filter(Boolean),
+    ),
+  ];
+  const uploads = uploadIds.length
+    ? await mongoDb
+        .collection("whatsapp_uploads")
+        .find(
+          { id: { $in: uploadIds } },
+          {
+            projection: {
+              id: 1,
+              uploadId: 1,
+              fileName: 1,
+              templateName: 1,
+              templateLabel: 1,
+              senderId: 1,
+              senderNumber: 1,
+              createdAt: 1,
+              updatedAt: 1,
+              sentAt: 1,
+            },
+          },
+        )
+        .toArray()
+    : [];
+  const uploadsById = new Map(
+    uploads.map((upload) => [Number(upload.id || upload.uploadId), upload]),
+  );
+
+  const rows = [];
+  senderReports.forEach((report, index) => {
+    const upload = uploadsById.get(Number(report.uploadId || 0)) || {};
+    const rawPayload = parseJsonField(
+      report.responseDetails,
+      report.responseDetails || {},
+    );
+    const mobile = formatPhoneForCall(
+      report.mobile || report.customerNumber || report.cleaned || "",
+    );
+    const sender =
+      report.senderNumber ||
+      report.integratedNumber ||
+      report.integrated_number ||
+      upload.senderId ||
+      upload.senderNumber ||
+      rawPayload.integratedNumber ||
+      rawPayload.integrated_number ||
+      "";
+    const replyHistory = parseJsonField(report.replyHistory, []);
+    const baseRow = {
+      ...normalizeMongoDoc(report),
+      id:
+        report.id ||
+        `sender-${report.uploadId || "all"}-${report.numberId || index}`,
+      eventType: "outbound",
+      normalizedStatus: normalizeReportStatus(report),
+      normalizedMobile: mobile,
+      customerNumber: mobile,
+      integratedNumber: sender,
+      integrated_number: sender,
+      templateName:
+        report.templateName ||
+        upload.templateName ||
+        upload.templateLabel ||
+        "",
+      campaignName: "",
+      receivedAt:
+        [
+          report.updatedAt,
+          report.lastReplyAt,
+          report.sentAt,
+          upload.updatedAt,
+          upload.createdAt,
+        ]
+          .filter(Boolean)
+          .sort()
+          .pop() || "",
+      requestedAt: report.sentAt || upload.sentAt || upload.createdAt || "",
+      statusUpdatedAt: report.updatedAt || report.lastUpdated || "",
+      requestId: report.responseId || report.messageId || "",
+      matchedUploadId: report.uploadId || null,
+      matchedNumberId: report.numberId || null,
+      uploadFileName: upload.fileName || report.uploadFileName || "",
+      uploadTemplateLabel:
+        upload.templateLabel || upload.templateName || report.templateName || "",
+      numberCurrentStatus: report.currentStatus || "",
+      numberDeliveryStatus: report.deliveryStatus || "",
+      sentMessage: report.sentMessage || "",
+      text: report.sentMessage || "",
+      customReply: report.customReply || getReplyTextFromHistory(replyHistory),
+      replyHistory,
+      lastReplyAt: report.lastReplyAt || "",
+      csvRowData: parseJsonField(report.csvRowData, {}),
+      rawPayload,
+      reason: report.reason || rawPayload.reason || "",
+      updatedAt: report.updatedAt || report.lastUpdated || "",
+    };
+
+    rows.push(baseRow);
+
+    const replyItems = normalizeReplyHistoryItems(
+      replyHistory,
+      report.customReply,
+      report.lastReplyAt,
+      report.replyWebhook || null,
+    );
+    replyItems.forEach((reply, replyIndex) => {
+      rows.push({
+        ...baseRow,
+        id: `${baseRow.id}-reply-${replyIndex + 1}`,
+        eventType: "inbound",
+        normalizedStatus: "inbound",
+        receivedAt:
+          reply.receivedAt || baseRow.lastReplyAt || baseRow.receivedAt,
+        requestedAt:
+          reply.receivedAt || baseRow.lastReplyAt || baseRow.requestedAt,
+        statusUpdatedAt: reply.receivedAt || baseRow.statusUpdatedAt,
+        text: reply.text,
+        customReply: reply.text,
+        lastReplyAt: reply.receivedAt || baseRow.lastReplyAt,
+        rawPayload: reply.rawPayload || {},
+        reason: "",
+      });
+    });
+  });
+
+  return rows.filter((row) => {
+    if (
+      filters.eventType &&
+      filters.eventType !== "all" &&
+      row.eventType !== filters.eventType
+    ) {
+      return false;
+    }
+
+    if (filters.status && filters.status !== "all") {
+      if (filters.status === "inbound") {
+        if (row.eventType !== "inbound") return false;
+      } else if (
+        row.eventType !== "inbound" &&
+        row.normalizedStatus !== filters.status &&
+        row.numberDeliveryStatus !== filters.status &&
+        row.numberCurrentStatus !== filters.status
+      ) {
+        return false;
+      }
+    }
+
+    return (
+      reportRowMatchesSearch(row, filters.search) &&
+      reportRowMatchesDateRange(row, filters)
+    );
+  });
 }
 async function ensureColumn() {
   // MongoDB is schemaless; no action required.
@@ -4303,21 +4540,26 @@ function reportRowMatchesSearch(row, search) {
 
 function reportRowMatchesDateRange(row, filters = {}) {
   if (!filters.startDateTime && !filters.endDateTime) return true;
-  const value =
-    row.receivedAt ||
-    row.statusUpdatedAt ||
-    row.requestedAt ||
-    row.updatedAt ||
-    "";
-  const time = new Date(value).getTime();
-  if (!time || Number.isNaN(time)) return false;
+  // Use the LATEST available timestamp so a row whose delivery webhook arrived
+  // today (but was sent yesterday) correctly matches a "Today" date filter.
+  const times = [
+    row.receivedAt,
+    row.statusUpdatedAt,
+    row.requestedAt,
+    row.updatedAt,
+  ]
+    .filter(Boolean)
+    .map((v) => new Date(v).getTime())
+    .filter((t) => !Number.isNaN(t) && t > 0);
+  if (!times.length) return false;
+  const latestTime = Math.max(...times);
   if (filters.startDateTime) {
     const start = new Date(filters.startDateTime).getTime();
-    if (!Number.isNaN(start) && time < start) return false;
+    if (!Number.isNaN(start) && latestTime < start) return false;
   }
   if (filters.endDateTime) {
     const end = new Date(filters.endDateTime).getTime();
-    if (!Number.isNaN(end) && time >= end) return false;
+    if (!Number.isNaN(end) && latestTime >= end) return false;
   }
   return true;
 }
@@ -4433,11 +4675,18 @@ async function listSelectedUploadReportRows(filters = {}) {
       templateName: upload.templateName || senderReport?.templateName || "",
       campaignName: "",
       receivedAt:
-        mergedReply.senderReport?.sentAt ||
-        upload.sentAt ||
-        row.lastUpdated ||
-        upload.createdAt ||
-        "",
+        // Use latest activity date: delivery-update time takes priority over sent time.
+        [
+          mergedReply.senderReport?.updatedAt,
+          row.lastUpdated,
+          mergedReply.senderReport?.sentAt,
+          upload.sentAt,
+          row.updatedAt,
+          upload.createdAt,
+        ]
+          .filter(Boolean)
+          .sort()
+          .pop() || "",
       requestedAt:
         mergedReply.senderReport?.sentAt ||
         upload.sentAt ||
@@ -4553,12 +4802,23 @@ async function listSelectedUploadReportRows(filters = {}) {
 async function getCustomReportRows(filters = {}) {
   const rows = filters.uploadId
     ? await listSelectedUploadReportRows(filters)
-    : await listCustomReportRowsFromMongo(filters);
+    : [
+        ...(await listCustomReportRowsFromMongo(filters)),
+        ...(await listSenderReportRowsForCustomReport(filters)),
+      ];
   return rows.map((row) => ({
     ...row,
     rawPayload: parseJsonField(row.rawPayload, {}),
     csvRowData: parseJsonField(row.csvRowData, {}),
-  }));
+  })).sort((a, b) => {
+    const aTime = new Date(
+      a.receivedAt || a.statusUpdatedAt || a.requestedAt || 0,
+    ).getTime();
+    const bTime = new Date(
+      b.receivedAt || b.statusUpdatedAt || b.requestedAt || 0,
+    ).getTime();
+    return bTime - aTime;
+  });
 }
 
 function getSafeSheetName(label) {

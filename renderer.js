@@ -459,10 +459,18 @@ dateTimePickerBackdrop.addEventListener("click", (event) => {
 });
 customEventType.addEventListener("change", () => {
   customFiltersTouched = true;
+  if (customEventType.value === "inbound") {
+    customStatus.value = "inbound";
+  }
   refreshCustomReport();
 });
 customStatus.addEventListener("change", () => {
   customFiltersTouched = true;
+  if (customStatus.value === "inbound") {
+    customEventType.value = "inbound";
+  } else if (customEventType.value === "inbound") {
+    customEventType.value = "all";
+  }
   refreshCustomReport();
 });
 customSearch.addEventListener("keydown", (event) => {
@@ -847,6 +855,8 @@ function syncCustomReportFiltersToCampaign(force = false) {
   if (!force && customFiltersTouched) return;
 
   customScope.value = selectedUploadId ? "selected" : "all";
+  customEventType.value = "all";
+  customStatus.value = "all";
   const selectedNumber = getSelectedNumber();
   if (selectedNumber) {
     setSelectValueIfOptionExists(customNumberFilter, selectedNumber.id || selectedNumber.number);
@@ -1707,9 +1717,14 @@ async function _doRefreshCustomReport() {
     customStartDateTime.value && customEndDateTime.value
       ? ` from ${new Date(customStartDateTime.value).toLocaleDateString()} to ${new Date(customEndDateTime.value).toLocaleDateString()}`
       : "";
+  const activeFilterText = [
+    customEventType.value !== "all" ? `type ${customEventType.options[customEventType.selectedIndex]?.textContent || customEventType.value}` : "",
+    customStatus.value !== "all" ? `status ${customStatus.options[customStatus.selectedIndex]?.textContent || customStatus.value}` : "",
+    customSearch.value.trim() ? `search "${customSearch.value.trim()}"` : "",
+  ].filter(Boolean).join(", ");
   customReportSummary.textContent = rows.length
     ? `${rows.length} records found for ${scopeText}${dateText}.`
-    : `No records found for ${scopeText}${dateText}.`;
+    : `No records found for ${scopeText}${dateText}${activeFilterText ? ` with ${activeFilterText}` : ""}. Try All types and All statuses to see sent transactions.`;
   renderCustomSummary(rows);
   customReportTableBody.innerHTML = "";
 
