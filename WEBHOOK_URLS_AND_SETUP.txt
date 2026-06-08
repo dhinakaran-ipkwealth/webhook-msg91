@@ -1,0 +1,35 @@
+Correct MSG91 webhook URLs and setup
+
+1) Put this in Electron .env:
+WEBHOOK_PUBLIC_BASE_URL=https://crm.ipkwealth.com
+
+2) MSG91 Dashboard > WhatsApp > Webhook (New):
+Use this URL for all dashboard webhooks:
+https://crm.ipkwealth.com/webhook
+
+Enable these event types:
+- On Outbound Report Received
+- On Inbound Request Received
+- On Inbound Report Received
+- On Delivered Event
+- On Failed Event
+- On Read Event
+- On Send Event
+- On URL Click Event
+
+3) Required fields to select in MSG91 webhook custom parameters:
+customerNumber, integratedNumber, direction, eventName, requestId, uuid, replyMsgId, contentType, text, button, interactive, reaction, messages, contacts, caption, filename, url, templateName, templateLanguage, reason, ts, statusCode, statusUpdatedAt, price, webhookType
+
+4) The Electron app will automatically send per-upload callback_url while sending template messages:
+https://crm.ipkwealth.com/webhook/msg91/<templateName>/<uploadId>
+
+5) Restart services:
+pm2 restart crm-msg91-webhook
+Restart Electron app
+
+6) Test webhook:
+curl -X POST https://crm.ipkwealth.com/webhook \
+  -H "Content-Type: application/json" \
+  -d '{"customerNumber":"919363406313","integratedNumber":"919363406313","contentType":"text","text":"Hi test","messages":"[{\"text\":{\"body\":\"Hi test\"},\"type\":\"text\"}]","ts":"2026-05-29T10:00:00+05:30"}'
+
+Expected: JSON response with received:true and event type inbound.
