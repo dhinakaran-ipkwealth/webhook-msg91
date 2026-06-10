@@ -91,6 +91,39 @@ let reportPollingTimer = null;
 let isDbClosing = false;
 let scheduleConfig = null;
 let scheduleTimer = null;
+let dailyCacheTimer = null;
+
+// IST (Asia/Calcutta) timezone helpers — all MongoDB queries use UTC Date objects
+const IST_OFFSET_MINUTES = 330; // UTC+5:30
+
+function nowIST() {
+  return new Date(Date.now() + IST_OFFSET_MINUTES * 60000);
+}
+
+function istLocalToUTC(istDate) {
+  return new Date(istDate.getTime() - IST_OFFSET_MINUTES * 60000);
+}
+
+// Returns { start, end } as UTC Date objects representing
+// yesterday HH:MM IST → today HH:MM IST (default 10:00 AM IST)
+function getTodayISTDataWindow(scheduleHour = 10, scheduleMin = 0) {
+  const ist = nowIST();
+  const y = ist.getUTCFullYear(), mo = ist.getUTCMonth(), d = ist.getUTCDate();
+  const end = istLocalToUTC(new Date(Date.UTC(y, mo, d, scheduleHour, scheduleMin, 0, 0)));
+  const start = istLocalToUTC(new Date(Date.UTC(y, mo, d - 1, scheduleHour, scheduleMin, 0, 0)));
+  return { start, end };
+}
+
+// Milliseconds until the next occurrence of HH:MM in IST
+function msUntilNextIST(hh, mm) {
+  const ist = nowIST();
+  const y = ist.getUTCFullYear(), mo = ist.getUTCMonth(), d = ist.getUTCDate();
+  let next = istLocalToUTC(new Date(Date.UTC(y, mo, d, hh, mm, 0, 0)));
+  if (next.getTime() <= Date.now()) {
+    next = istLocalToUTC(new Date(Date.UTC(y, mo, d + 1, hh, mm, 0, 0)));
+  }
+  return next.getTime() - Date.now();
+}
 
 const scheduleFilePath = path.join(
   app.getPath("userData"),
@@ -128,30 +161,22 @@ function scheduleNextRun(cfg) {
   clearScheduleTimer();
   if (!cfg || !cfg.enabled) return;
   const [hh, mm] = (cfg.time || "10:00").split(":").map((v) => Number(v));
-  const now = new Date();
-  const next = new Date(now);
-  next.setHours(hh, mm, 0, 0);
-  if (next <= now) next.setDate(next.getDate() + 1);
-  const ms = next.getTime() - now.getTime();
-  scheduleTimer = setTimeout(async function runAndReschedule() {
+
+  async function runAndReschedule() {
     try {
       if (cfg.mechanism === "email") {
+        // Use yesterday HH:MM IST → today HH:MM IST window (UTC Date objects for MongoDB)
+        const { start, end } = getTodayISTDataWindow(hh, mm);
         console.log(
-          `Scheduled run triggered. Generating 24-hour RM and Admin reports (from configured ${cfg.time} yesterday to ${cfg.time} today)...`,
+          `Scheduled run triggered. Generating 24-hour RM and Admin reports ` +
+          `(${start.toISOString()} → ${end.toISOString()} UTC, i.e. ${cfg.time} IST yesterday to today)...`,
         );
-
-        // 1. Calculate the exact 24-hour range (from configured time yesterday to configured time today)
-        const end = new Date();
-        end.setHours(hh, mm, 0, 0);
-        const start = new Date(end);
-        start.setDate(start.getDate() - 1);
 
         const timeFilters = {
           startDateTime: start.toISOString(),
           endDateTime: end.toISOString(),
         };
 
-        // 2. Generate & email full 24-hour comprehensive report to Admin
         const fullRangeResult = await exportCustomReport(timeFilters);
         await sendAdminReportEmailDirect(
           fullRangeResult.filePath,
@@ -159,21 +184,16 @@ function scheduleNextRun(cfg) {
           end.toISOString(),
         );
 
-        // 3. Generate & email grouped 24-hour reports to each corresponding RM
         await sendRmGroupedReportsDirect(timeFilters);
       } else if (cfg.mechanism === "sftp") {
         const result = await exportCustomReport({});
         await deliverFileBySftp(result.filePath);
       } else {
         const result = await exportCustomReport({});
-        // Auto-export: optionally move to folder specified in env EXPORT_FOLDER
         const exportFolder = process.env.EXPORT_FOLDER;
         if (exportFolder) {
           try {
-            const dest = path.join(
-              exportFolder,
-              path.basename(result.filePath),
-            );
+            const dest = path.join(exportFolder, path.basename(result.filePath));
             fs.copyFileSync(result.filePath, dest);
           } catch (e) {
             console.warn("Auto-export copy failed:", e.message);
@@ -183,9 +203,11 @@ function scheduleNextRun(cfg) {
     } catch (err) {
       console.warn("Scheduled export failed:", err.message);
     }
-    // schedule next day
-    scheduleTimer = setTimeout(runAndReschedule, 24 * 60 * 60 * 1000);
-  }, ms);
+    // Reschedule to the same IST time tomorrow (accounts for DST-like offsets)
+    scheduleTimer = setTimeout(runAndReschedule, msUntilNextIST(hh, mm));
+  }
+
+  scheduleTimer = setTimeout(runAndReschedule, msUntilNextIST(hh, mm));
 }
 
 async function deliverFileByEmail(filePath, toEmailsCsv) {
@@ -2213,6 +2235,7 @@ async function listCustomReportRowsFromMongo(filters = {}) {
 
   const rows = events.map((event, index) => {
     const raw = parseJsonField(event.rawPayload, event.rawPayload || {});
+    const csvRowData = parseJsonField(event.csvRowData, {});
     const text =
       event.text ||
       event.customReply ||
@@ -2243,6 +2266,11 @@ async function listCustomReportRowsFromMongo(filters = {}) {
         raw.customer_number ||
         event.normalizedMobile ||
         "",
+      customerName:
+        event.customerName ||
+        raw.customerName ||
+        raw.customer_name ||
+        getCustomerNameForReport({ ...event, csvRowData }),
       integratedNumber:
         event.integratedNumber ||
         event.integrated_number ||
@@ -2274,6 +2302,7 @@ async function listCustomReportRowsFromMongo(filters = {}) {
         raw.oneApiRequestId ||
         raw.uuid ||
         "",
+      sentMessage: getSentMessageForReport({ ...event, csvRowData }),
       text,
       customReply:
         event.customReply || (event.eventType === "inbound" ? text : ""),
@@ -2292,7 +2321,7 @@ async function listCustomReportRowsFromMongo(filters = {}) {
       numberDeliveryStatus: event.numberDeliveryStatus || "",
       uploadFileName: event.uploadFileName || "",
       uploadTemplateLabel: event.uploadTemplateLabel || "",
-      csvRowData: event.csvRowData || {},
+      csvRowData,
     };
   });
 
@@ -2377,6 +2406,7 @@ async function listSenderReportRowsForCustomReport(filters = {}) {
       report.responseDetails,
       report.responseDetails || {},
     );
+    const csvRowData = parseJsonField(report.csvRowData, {});
     const mobile = formatPhoneForCall(
       report.mobile || report.customerNumber || report.cleaned || "",
     );
@@ -2399,6 +2429,7 @@ async function listSenderReportRowsForCustomReport(filters = {}) {
       normalizedStatus: normalizeReportStatus(report),
       normalizedMobile: mobile,
       customerNumber: mobile,
+      customerName: getCustomerNameForReport({ ...report, csvRowData }),
       integratedNumber: sender,
       integrated_number: sender,
       templateName:
@@ -2428,12 +2459,12 @@ async function listSenderReportRowsForCustomReport(filters = {}) {
         upload.templateLabel || upload.templateName || report.templateName || "",
       numberCurrentStatus: report.currentStatus || "",
       numberDeliveryStatus: report.deliveryStatus || "",
-      sentMessage: report.sentMessage || "",
+      sentMessage: getSentMessageForReport({ ...report, csvRowData }),
       text: report.sentMessage || "",
       customReply: report.customReply || getReplyTextFromHistory(replyHistory),
       replyHistory,
       lastReplyAt: report.lastReplyAt || "",
-      csvRowData: parseJsonField(report.csvRowData, {}),
+      csvRowData,
       rawPayload,
       reason: report.reason || rawPayload.reason || "",
       updatedAt: report.updatedAt || report.lastUpdated || "",
@@ -3911,9 +3942,9 @@ async function exportUploadReport(uploadId) {
       "Current Status": row.currentStatus || "",
       "Delivery Status": row.deliveryStatus || "",
       "Sent Message": row.sentMessage || "",
-      "Custom Reply": row.customReply || "",
+      "Customer Reply": row.customReply || "",
       "Reply History": row.replyHistory || "",
-      "Last Reply At": row.lastReplyAt || "",
+      "Reply Time": row.lastReplyAt || "",
       "Retry Count": row.retryCount || 0,
       "Response ID": row.responseId || "",
       "Message ID": row.messageId || "",
@@ -4364,10 +4395,8 @@ ipcMain.handle("fetch-sender-stats", async (event, filters = {}) => {
 
   const match = {};
   if (filters.todayOnly) {
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(start);
-    end.setDate(end.getDate() + 1);
+    // "Today" = yesterday 10:00 AM IST → today 10:00 AM IST (stored as UTC in MongoDB)
+    const { start, end } = getTodayISTDataWindow(10, 0);
     match.sentAt = { $gte: start.toISOString(), $lt: end.toISOString() };
   } else if (filters.startDateTime || filters.endDateTime) {
     match.sentAt = {};
@@ -4448,10 +4477,8 @@ ipcMain.handle("schedule-run-now", async () => {
         "Manual trigger for schedule-run-now starting (Email flow with 24-hour RM/Admin split)...",
       );
       const [hh, mm] = (cfg.time || "10:00").split(":").map((v) => Number(v));
-      const end = new Date();
-      end.setHours(hh, mm, 0, 0);
-      const start = new Date(end);
-      start.setDate(start.getDate() - 1);
+      // Use yesterday HH:MM IST → today HH:MM IST window (UTC for MongoDB)
+      const { start, end } = getTodayISTDataWindow(hh, mm);
 
       const filters = {
         startDateTime: start.toISOString(),
@@ -4484,7 +4511,7 @@ ipcMain.handle("send-admin-report-email", async (event, filters = {}) => {
     throw new Error("No transactions found for the selected filter range.");
   }
   const prefix = "admin-custom-report";
-  const { filePath } = generateExcelFromRows(rows, prefix, !filters.uploadId); // all-upload admin reports use multi-tab workbook
+  const { filePath } = generateExcelFromRows(rows, prefix, true);
 
   const start = filters.startDateTime || null;
   const end = filters.endDateTime || null;
@@ -4641,6 +4668,7 @@ async function listSelectedUploadReportRows(filters = {}) {
   rows.forEach((row) => {
     const numberId = Number(row.numberId || row.id || 0);
     const mobile = formatPhoneForCall(row.cleaned || row.original || "");
+    const csvRowData = parseRowData(row);
     const senderReport =
       senderReportMap.byNumberId.get(numberId) ||
       senderReportMap.byMobile.get(mobile) ||
@@ -4661,7 +4689,7 @@ async function listSelectedUploadReportRows(filters = {}) {
       normalizedStatus: normalizeReportStatus(mergedReply),
       normalizedMobile: mobile || row.cleaned || row.original || "",
       customerNumber: mobile || row.cleaned || row.original || "",
-      customerName: "",
+      customerName: getCustomerNameForReport({ ...row, csvRowData }),
       integratedNumber:
         upload.senderId ||
         upload.senderNumber ||
@@ -4702,11 +4730,15 @@ async function listSelectedUploadReportRows(filters = {}) {
       numberDeliveryStatus:
         mergedReply.deliveryStatus || row.deliveryStatus || "",
       numberRetryCount: row.retryCount || 0,
-      sentMessage: mergedReply.sentMessage || row.sentMessage || "",
+      sentMessage: getSentMessageForReport({
+        ...row,
+        csvRowData,
+        sentMessage: mergedReply.sentMessage || row.sentMessage || "",
+      }),
       text: mergedReply.sentMessage || row.sentMessage || "",
       customReply: latestReplyText,
       lastReplyAt: mergedReply.lastReplyAt || "",
-      csvRowData: parseRowData(row),
+      csvRowData,
       rawPayload: outboundPayload,
       reason: row.validationError || senderReport?.reason || "",
       updatedAt: row.updatedAt || row.lastUpdated || "",
@@ -4832,6 +4864,103 @@ function getSafeSheetName(label) {
   return clean.trim() || "Sheet";
 }
 
+function getUniqueSheetName(workbook, label) {
+  const base = getSafeSheetName(label);
+  if (!workbook.SheetNames.includes(base)) return base;
+
+  for (let index = 2; index < 1000; index += 1) {
+    const suffix = ` ${index}`;
+    const candidate = getSafeSheetName(
+      `${base.slice(0, Math.max(1, 31 - suffix.length))}${suffix}`,
+    );
+    if (!workbook.SheetNames.includes(candidate)) return candidate;
+  }
+
+  return getSafeSheetName(`${base.slice(0, 24)} ${Date.now()}`);
+}
+
+function getRowFieldValue(row, candidates = []) {
+  const data = parseJsonField(row?.csvRowData, {});
+  if (!data || typeof data !== "object") return "";
+
+  const normalizedValues = new Map();
+  Object.entries(data).forEach(([key, value]) => {
+    normalizedValues.set(
+      String(key).toLowerCase().replace(/[^a-z0-9]+/g, ""),
+      value,
+    );
+  });
+
+  for (const candidate of candidates) {
+    const key = String(candidate).toLowerCase().replace(/[^a-z0-9]+/g, "");
+    const value = normalizedValues.get(key);
+    if (value !== undefined && value !== null && String(value).trim()) {
+      return String(value).trim();
+    }
+  }
+  return "";
+}
+
+function getCustomerNameForReport(row) {
+  return (
+    row.customerName ||
+    getRowFieldValue(row, [
+      "Customer Name",
+      "Client Name",
+      "Name",
+      "Customer",
+      "Client",
+    ]) ||
+    ""
+  );
+}
+
+function getSentMessageForReport(row) {
+  if (row.sentMessage) return row.sentMessage;
+  const parts = [
+    ["Stock Name", getRowFieldValue(row, ["Stock Name", "Stock", "Scrip", "Symbol"])],
+    ["Client Name", getRowFieldValue(row, ["Client Name", "Customer Name", "Name", "Client"])],
+    ["Price", getRowFieldValue(row, ["Price", "PRICE", "Rate"])],
+    ["Client Code", getRowFieldValue(row, ["Client Code", "ClientCode", "Code"])],
+    ["Order Type", getRowFieldValue(row, ["Order Type", "OrderType", "Buy/Sell", "Side"])],
+    ["Qty", getRowFieldValue(row, ["Qty", "QTY", "Quantity"])],
+  ].filter(([, value]) => value);
+  return parts.map(([label, value]) => `${label}: ${value}`).join(" | ");
+}
+
+function getTemplateLabelForReport(row) {
+  return (
+    row.templateName ||
+    row.uploadTemplateLabel ||
+    row.templateLabel ||
+    row.campaignName ||
+    "No Template"
+  );
+}
+
+function appendReportWorksheet(workbook, label, rows) {
+  if (!rows.length) return;
+  const formattedRows = rows.map((row, index) =>
+    formatSingleRowForExcel(row, index),
+  );
+  const worksheet = XLSX.utils.json_to_sheet(formattedRows);
+  XLSX.utils.book_append_sheet(
+    workbook,
+    worksheet,
+    getUniqueSheetName(workbook, label),
+  );
+}
+
+function groupRowsByTemplate(rows) {
+  const groups = new Map();
+  rows.forEach((row) => {
+    const templateLabel = getTemplateLabelForReport(row);
+    if (!groups.has(templateLabel)) groups.set(templateLabel, []);
+    groups.get(templateLabel).push(row);
+  });
+  return groups;
+}
+
 function formatSingleRowForExcel(row, index) {
   return {
     "#": index + 1,
@@ -4840,14 +4969,15 @@ function formatSingleRowForExcel(row, index) {
     Status: row.normalizedStatus || "",
     "Message Status": row.numberCurrentStatus || "",
     "Delivery Status": row.numberDeliveryStatus || "",
-    Sender: row.integratedNumber || row.integrated_number || "",
+    "IPK Sender": row.integratedNumber || row.integrated_number || "",
     Mobile: row.normalizedMobile || row.customerNumber || "",
-    Customer: row.customerName || "",
+    "Customer Name": getCustomerNameForReport(row),
     Upload: row.uploadFileName || "",
     "Request ID":
       row.requestId || row.oneApiRequestId || row.replyMsgId || row.uuid || "",
-    "Template Name": row.templateName || row.uploadTemplateLabel || "",
+    "Template Name": getTemplateLabelForReport(row),
     Campaign: row.campaignName || "",
+    "Sent Message": getSentMessageForReport(row),
     Message:
       row.text ||
       extractWebhookMessageText(row.rawPayload || row) ||
@@ -4856,9 +4986,8 @@ function formatSingleRowForExcel(row, index) {
       row.button ||
       row.messages ||
       "",
-    "Sent Message": row.sentMessage || "",
-    "Custom Reply": row.customReply || "",
-    "Last Reply At": row.lastReplyAt || "",
+    "Customer Reply": row.customReply || "",
+    "Reply Time": row.lastReplyAt || "",
     "Dynamic Response": JSON.stringify(row.rawPayload || {}),
     Reason: row.reason || row.cleverTapErrorReason || "",
     Price: row.price || "",
@@ -4873,9 +5002,9 @@ function generateExcelFromRows(rows, filenamePrefix, isMultiSheet = false) {
   if (isMultiSheet) {
     const config = loadMsg91Config();
     const rms = config.integratedNumbers || [];
-    const matchedRowIds = new Set();
+    const matchedRows = new Set();
 
-    // 1. Group rows by configured RMs/Team Numbers and append separate sheets
+    // Admin workbook: one sheet per configured IPK sender + template.
     rms.forEach((rm) => {
       const rmNumber = String(rm.number).trim();
       if (!rmNumber) return;
@@ -4887,56 +5016,37 @@ function generateExcelFromRows(rows, filenamePrefix, isMultiSheet = false) {
         const matches =
           rowSender === rmNumber || rowSender === `client-${rmNumber}`;
         if (matches) {
-          matchedRowIds.add(row.id || row._id || rowSender);
+          matchedRows.add(row);
         }
         return matches;
       });
 
-      if (rmRows.length > 0) {
-        const formattedRows = rmRows.map((r, index) =>
-          formatSingleRowForExcel(r, index),
-        );
-        const worksheet = XLSX.utils.json_to_sheet(formattedRows);
-        XLSX.utils.book_append_sheet(
+      groupRowsByTemplate(rmRows).forEach((templateRows, templateLabel) => {
+        appendReportWorksheet(
           workbook,
-          worksheet,
-          getSafeSheetName(rm.label),
+          `${rm.label || rmNumber} - ${templateLabel}`,
+          templateRows,
         );
-      }
+      });
     });
 
-    // 2. Collate any unmatched transactions and append to an "Other Event Logs" sheet
-    const unmatchedRows = rows.filter((row) => {
-      return !matchedRowIds.has(
-        row.id ||
-          row._id ||
-          String(row.integratedNumber || row.integrated_number || ""),
+    // Collate any unmatched transactions by template too, so nothing is lost.
+    const unmatchedRows = rows.filter((row) => !matchedRows.has(row));
+    groupRowsByTemplate(unmatchedRows).forEach((templateRows, templateLabel) => {
+      appendReportWorksheet(
+        workbook,
+        `Other - ${templateLabel}`,
+        templateRows,
       );
     });
-
-    if (unmatchedRows.length > 0) {
-      const formattedRows = unmatchedRows.map((r, index) =>
-        formatSingleRowForExcel(r, index),
-      );
-      const worksheet = XLSX.utils.json_to_sheet(formattedRows);
-      XLSX.utils.book_append_sheet(workbook, worksheet, "Other Event Logs");
-    }
 
     // Fallback sheet if absolutely nothing was matched or appended
     if (workbook.SheetNames.length === 0) {
-      const formattedRows = rows.map((r, index) =>
-        formatSingleRowForExcel(r, index),
-      );
-      const worksheet = XLSX.utils.json_to_sheet(formattedRows);
-      XLSX.utils.book_append_sheet(workbook, worksheet, "Webhook Report");
+      appendReportWorksheet(workbook, "Webhook Report", rows);
     }
   } else {
     // Single sheet export for isolated RM reports
-    const formattedRows = rows.map((r, index) =>
-      formatSingleRowForExcel(r, index),
-    );
-    const worksheet = XLSX.utils.json_to_sheet(formattedRows);
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Webhook Report");
+    appendReportWorksheet(workbook, "Webhook Report", rows);
   }
 
   const filePath = path.join(
@@ -5595,6 +5705,41 @@ app.on("second-instance", () => {
   showMainWindow();
 });
 
+// Daily cache cleaner — clears Electron session cache at midnight IST every day
+// so stale data from yesterday's uploads doesn't persist in the renderer.
+async function clearYesterdayUploadsCache() {
+  try {
+    const { session: electronSession } = require("electron");
+    await electronSession.defaultSession.clearCache();
+    await electronSession.defaultSession.clearStorageData({
+      storages: ["indexdb", "serviceworkers", "cachestorage"],
+    });
+    const windows = BrowserWindow.getAllWindows();
+    for (const win of windows) {
+      await win.webContents.session.clearCache();
+      await win.webContents.session.clearStorageData({
+        storages: ["localstorage", "indexdb", "serviceworkers", "cachestorage"],
+      });
+    }
+    console.log(`[Cache] Cleared yesterday's upload caches at ${nowIST().toISOString()} IST`);
+  } catch (err) {
+    console.warn("[Cache] Daily cache clear failed:", err.message);
+  }
+}
+
+function scheduleDailyCacheClean() {
+  if (dailyCacheTimer) { clearTimeout(dailyCacheTimer); dailyCacheTimer = null; }
+  // Schedule next midnight IST (00:00 IST)
+  const ms = msUntilNextIST(0, 0);
+  dailyCacheTimer = setTimeout(async function runCacheClean() {
+    await clearYesterdayUploadsCache();
+    // Reschedule for the following midnight IST
+    dailyCacheTimer = setTimeout(runCacheClean, msUntilNextIST(0, 0));
+  }, ms);
+  const nextMidnightIST = new Date(Date.now() + ms);
+  console.log(`[Cache] Daily cache clean scheduled at ${nextMidnightIST.toISOString()} UTC (midnight IST)`);
+}
+
 app.whenReady().then(async () => {
   try {
     enableRunAtLogin();
@@ -5604,6 +5749,7 @@ app.whenReady().then(async () => {
     createTray();
     createWindow();
     startPolling();
+    scheduleDailyCacheClean();
     // load schedule config and schedule export if enabled
     try {
       scheduleConfig = loadScheduleConfig();
@@ -5643,6 +5789,10 @@ app.on("before-quit", () => {
   if (reportPollingTimer) {
     clearInterval(reportPollingTimer);
     reportPollingTimer = null;
+  }
+  if (dailyCacheTimer) {
+    clearTimeout(dailyCacheTimer);
+    dailyCacheTimer = null;
   }
   if (webhookServer) {
     webhookServer.close();

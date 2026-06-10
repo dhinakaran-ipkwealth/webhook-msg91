@@ -766,6 +766,11 @@ async function storeWebhook(body, context = {}) {
     const insertDoc = { ...item };
     delete insertDoc.updatedAt;
     delete insertDoc.modifiedAt;
+    // These fields are also written via $set below — Mongo rejects an update
+    // that targets the same path from both $setOnInsert and $set.
+    delete insertDoc.eventKey;
+    delete insertDoc.stableKey;
+    delete insertDoc.rawPayload;
     const dedupeFilter = existingEventKeys.has(item.eventKey)
       ? { eventKey: item.eventKey }
       : item.stableKey

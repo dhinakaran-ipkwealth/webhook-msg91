@@ -1371,7 +1371,7 @@ function renderDeliveryRows(rows = lastReportRows) {
       <td>${reportMobileHtml}</td>
       <td><div class="raw-cell">${escapeHtml(row.sentMessage || "-")}</div></td>
       <td>${deliveryHtml}</td>
-      <td><div class="raw-cell ${formatReplyHistory(row) !== "-" ? "reply-cell-highlight" : ""}">${escapeHtml(formatReplyHistory(row))}</div></td>
+      <td><div class="raw-cell ${formatReplyHistory(row) !== "-" ? "reply-cell-highlight" : ""}">${formatReplyHistoryHtml(row)}</div></td>
       <td>${escapeHtml(replyTime)}</td>
       <td>${escapeHtml(row.responseId || "-")}</td>
     `;
@@ -1414,6 +1414,14 @@ function getReportRangeForPreset(preset) {
   const start = new Date(now);
   const end = new Date(now);
 
+  if (preset === "yesterday") {
+    // Yesterday 10:00 AM IST → Today 10:00 AM IST
+    start.setDate(start.getDate() - 1);
+    start.setHours(10, 0, 0, 0);
+    end.setHours(10, 0, 0, 0);
+    return { start, end };
+  }
+
   if (preset === "week") {
     start.setDate(start.getDate() - 6);
   } else if (preset === "month") {
@@ -1444,13 +1452,15 @@ function formatDateTimeDisplayLabel(startIso, endIso) {
   if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
     return "Select date range";
   }
-  return `${startDate.toLocaleString()} — ${endDate.toLocaleString()}`;
+  const fmt = (d) => d.toLocaleString("en-IN", { timeZone: "Asia/Calcutta" });
+  return `${fmt(startDate)} — ${fmt(endDate)}`;
 }
 
 function updateDateRangeDisplay() {
   if (customStartDateTime.value && customEndDateTime.value) {
     const presetLabel = {
       day: "Today",
+      yesterday: "Yesterday",
       week: "Last 7 days",
       month: "This month",
       custom: "",
@@ -1517,7 +1527,8 @@ function displayDate(value) {
   if (!value) return "-";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString();
+  // Always display in IST (Asia/Calcutta) regardless of system locale
+  return date.toLocaleString("en-IN", { timeZone: "Asia/Calcutta" });
 }
 
 function formatJsonBlock(value) {
@@ -1542,7 +1553,7 @@ function truncateText(text, max = 120) {
   return s.length > max ? s.slice(0, max - 1) + "…" : s;
 }
 
-function formatReplyHistory(row) {
+function formatReplyHistoryEntries(row) {
   const history = Array.isArray(row.replyHistory) ? row.replyHistory : [];
   const directReply =
     row.customReply ||
@@ -1550,21 +1561,56 @@ function formatReplyHistory(row) {
     row.senderReport?.customReply ||
     "";
 
-  if (!history.length) return directReply || "-";
-
-  const lines = history
-    .map((reply) => {
-      const time = displayDate(reply.receivedAt || reply.lastReplyAt || reply.updatedAt);
-      const text = reply.text || reply.customReply || JSON.stringify(reply.payload || reply.rawPayload || {});
-      return `${time}: ${text}`;
-    })
-    .filter((line) => line && !line.endsWith("{}"));
-
-  if (directReply && !lines.some((line) => line.includes(directReply))) {
-    lines.unshift(directReply);
+  if (!history.length) {
+    return directReply ? [{ time: "", text: directReply }] : [];
   }
 
-  return lines.length ? lines.join("\n") : (directReply || "-");
+  const entries = history
+    .map((reply) => ({
+      time: displayDate(reply.receivedAt || reply.lastReplyAt || reply.updatedAt),
+      text: reply.text || reply.customReply || JSON.stringify(reply.payload || reply.rawPayload || {}),
+    }))
+    .filter((entry) => entry.text && !entry.text.endsWith("{}"));
+
+  if (directReply && !entries.some((entry) => entry.text.includes(directReply))) {
+    entries.unshift({ time: "", text: directReply });
+  }
+
+  return entries;
+}
+
+function formatReplyHistory(row) {
+  const entries = formatReplyHistoryEntries(row);
+  if (!entries.length) return "-";
+  return entries
+    .map((entry) => (entry.time ? `${entry.time}: ${entry.text}` : entry.text))
+    .join("\n");
+}
+
+// Returns an icon for known WhatsApp button replies: a green check for
+// "Execute the Trade" and a red cross for "Deny". Any other reply text is
+// shown as-is with no icon.
+function getReplyIndicatorHtml(text) {
+  const normalized = String(text || "").trim().toLowerCase();
+  if (normalized === "execute the trade") {
+    return '<span class="reply-icon reply-icon-positive" title="Execute the Trade">&#10003;</span>';
+  }
+  if (normalized === "deny" || normalized === "denied") {
+    return '<span class="reply-icon reply-icon-negative" title="Deny">&#10007;</span>';
+  }
+  return "";
+}
+
+function formatReplyHistoryHtml(row) {
+  const entries = formatReplyHistoryEntries(row);
+  if (!entries.length) return "-";
+  return entries
+    .map((entry) => {
+      const icon = getReplyIndicatorHtml(entry.text);
+      const prefix = entry.time ? `${escapeHtml(entry.time)}: ` : "";
+      return `<div class="reply-line">${icon}${prefix}${escapeHtml(entry.text)}</div>`;
+    })
+    .join("");
 }
 
 function getReplyTime(row) {
@@ -1621,6 +1667,43 @@ function getMessageText(row) {
   if (row.interactive) return row.interactive;
   if (row.messages) return row.messages;
   return "-";
+}
+
+function getCsvField(row, candidates = []) {
+  const data = row?.csvRowData && typeof row.csvRowData === "object" ? row.csvRowData : {};
+  const normalized = Object.fromEntries(
+    Object.entries(data).map(([key, value]) => [
+      String(key).toLowerCase().replace(/[^a-z0-9]+/g, ""),
+      value,
+    ]),
+  );
+  for (const candidate of candidates) {
+    const key = String(candidate).toLowerCase().replace(/[^a-z0-9]+/g, "");
+    const value = normalized[key];
+    if (value !== undefined && value !== null && String(value).trim()) return String(value).trim();
+  }
+  return "";
+}
+
+function getCustomerName(row) {
+  return (
+    row.customerName ||
+    getCsvField(row, ["Customer Name", "Client Name", "Name", "Customer", "Client"]) ||
+    "-"
+  );
+}
+
+function getSentMessage(row) {
+  if (row.sentMessage) return row.sentMessage;
+  const parts = [
+    ["Stock Name", getCsvField(row, ["Stock Name", "Stock", "Scrip", "Symbol"])],
+    ["Client Name", getCsvField(row, ["Client Name", "Customer Name", "Name", "Client"])],
+    ["Price", getCsvField(row, ["Price", "PRICE", "Rate"])],
+    ["Client Code", getCsvField(row, ["Client Code", "ClientCode", "Code"])],
+    ["Order Type", getCsvField(row, ["Order Type", "OrderType", "Buy/Sell", "Side"])],
+    ["Qty", getCsvField(row, ["Qty", "QTY", "Quantity"])],
+  ].filter(([, value]) => value);
+  return parts.length ? parts.map(([label, value]) => `${label}: ${value}`).join(" | ") : "-";
 }
 
 function flattenPayload(value, prefix = "", result = {}) {
@@ -1712,10 +1795,10 @@ async function _doRefreshCustomReport() {
   );
   lastCustomReportRows = rows;
   const scopeText =
-    customScope.value === "selected" ? "the selected upload report" : "all raw webhook events";
+    customScope.value === "selected" ? "the selected upload report" : "all transactions + webhook events";
   const dateText =
     customStartDateTime.value && customEndDateTime.value
-      ? ` from ${new Date(customStartDateTime.value).toLocaleDateString()} to ${new Date(customEndDateTime.value).toLocaleDateString()}`
+      ? ` from ${new Date(customStartDateTime.value).toLocaleDateString("en-IN", { timeZone: "Asia/Calcutta" })} to ${new Date(customEndDateTime.value).toLocaleDateString("en-IN", { timeZone: "Asia/Calcutta" })}`
       : "";
   const activeFilterText = [
     customEventType.value !== "all" ? `type ${customEventType.options[customEventType.selectedIndex]?.textContent || customEventType.value}` : "",
@@ -1795,6 +1878,10 @@ async function _doRefreshCustomReport() {
       ? `<span class="badge badge-sent" style="font-size: 11px; padding: 2px 8px;">${escapeHtml(senderLabel)}</span>`
       : `<span class="small-note">-</span>`;
 
+    const customerReplyHtml = formatReplyHistoryHtml(row);
+    const replyTimeText = getReplyTime(row);
+    const sentMessageText = getSentMessage(row);
+
     tr.innerHTML = `
       <td>${index + 1}</td>
       <td>${escapeHtml(displayDate(row.receivedAt || row.statusUpdatedAt || row.requestedAt))}</td>
@@ -1803,9 +1890,12 @@ async function _doRefreshCustomReport() {
       <td class="status-detail-cell">${escapeHtml(getMatchedMessageStatus(row))}</td>
       <td>${senderHtml}</td>
       <td>${mobileHtml}</td>
-      <td style="font-weight: 600; color: var(--text-primary);">${escapeHtml(row.customerName || "-")}</td>
+      <td style="font-weight: 600; color: var(--text-primary);">${escapeHtml(getCustomerName(row))}</td>
       <td>${escapeHtml(row.uploadFileName || "-")}</td>
+      <td class="reply-text-cell" style="max-width:180px; white-space:pre-wrap; word-break:break-word;">${customerReplyHtml}</td>
+      <td class="reply-time-cell" style="white-space:nowrap;">${escapeHtml(replyTimeText)}</td>
       <td>${templateHtml}</td>
+      <td><div class="raw-cell" style="max-width:280px; white-space:pre-wrap; word-break:break-word;">${escapeHtml(sentMessageText)}</div></td>
       <td>${readableCellHtml}</td>
       <td>${dynamicCellHtml}</td>
       <td>${reasonBase}${updatedNote}</td>
@@ -1827,7 +1917,7 @@ const customReportHelpBtn = document.getElementById("customReportHelp");
 if (customReportHelpBtn) {
   customReportHelpBtn.addEventListener("click", () => {
     showAlert(
-      "Selected upload report uses the same fast matched rows as Uploads & Batches. All raw webhook events is for admin debugging and may be slower because it scans webhook events and sender reports.",
+      "Selected upload report uses the same fast matched rows as Uploads & Batches. All transactions + webhook events scans sender reports and raw webhook events for admin reporting.",
       "info",
       10000,
     );

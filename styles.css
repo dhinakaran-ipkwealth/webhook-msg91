@@ -3,7 +3,7 @@
 =========================== */
 
 #customReportTable {
-  min-width: 1800px;
+  min-width: 2100px;
 }
 
 #customReportTable th {
@@ -37,10 +37,18 @@
 
 .table-wrap {
   border-radius: 20px;
-  overflow: auto;
+  width: 100%;
+  max-height: min(62vh, 620px);
+  overflow-x: auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border: 1px solid #e2e8f0;
   box-shadow:
     0 15px 40px rgba(15,23,42,.08);
+}
+
+.table-wrap table {
+  table-layout: auto;
 }
 
 /* ===========================
@@ -180,6 +188,43 @@
   border-radius: 999px;
   font-size: 12px;
   font-weight: 700;
+}
+
+/* ===========================
+   CUSTOMER REPLY INDICATORS
+=========================== */
+
+.reply-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.reply-line + .reply-line {
+  margin-top: 4px;
+}
+
+.reply-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.reply-icon-positive {
+  background: #dcfce7;
+  color: #16a34a;
+}
+
+.reply-icon-negative {
+  background: #fee2e2;
+  color: #dc2626;
 }
 
 /* ===========================

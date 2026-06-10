@@ -244,7 +244,11 @@
       .split-card-foreign { border-left: 4px solid var(--good); }
 
       .table-wrap {
-        overflow: auto;
+        width: 100%;
+        max-height: min(62vh, 620px);
+        overflow-x: auto;
+        overflow-y: auto;
+        overscroll-behavior: contain;
         border: 1px solid var(--line);
         border-radius: 8px;
         background: #fff;
@@ -254,9 +258,10 @@
         width: 100%;
         border-collapse: collapse;
         min-width: 900px;
+        table-layout: auto;
       }
 
-      #customReportTable { min-width: 1900px; }
+      #customReportTable { min-width: 2100px; }
 
       th, td {
         border-bottom: 1px solid var(--line);
@@ -562,7 +567,7 @@
               <select id="customScope"><option value="all">All transactions + webhook events</option><option value="selected">Selected upload report</option></select>
               <select id="customNumberFilter"><option value="all">All sender numbers</option></select>
               <select id="customTemplateFilter"><option value="all">All templates</option></select>
-              <select id="customRangePreset"><option value="day">Today</option><option value="week">This week</option><option value="month">This month</option><option value="custom">Custom</option></select>
+              <select id="customRangePreset"><option value="day">Today</option><option value="yesterday">Yesterday</option><option value="week">This week</option><option value="month">This month</option><option value="custom">Custom</option></select>
               <input id="customDateTimeDisplay" type="text" readonly placeholder="Date range" />
               <button id="customDateTimeOpen" class="secondary-button small-button">Range</button>
               <select id="customEventType"><option value="all">All types</option><option value="outbound">Outbound</option><option value="inbound">Inbound</option></select>
@@ -582,7 +587,7 @@
               <table id="customReportTable">
                 <thead>
                   <tr>
-                    <th>#</th><th>Received</th><th>Type</th><th>Status</th><th>Matched Status</th><th>Sender</th><th>Mobile</th><th>Customer</th><th>Upload</th><th>Template</th><th>Message</th><th>Dynamic Response</th><th>Reason</th>
+                    <th>#</th><th>Received</th><th>Type</th><th>Status</th><th>Matched Status</th><th>IPK Sender</th><th>Mobile</th><th>Customer Name</th><th>Upload</th><th>Customer Reply</th><th>Reply Time</th><th>Template</th><th>Sent Message</th><th>Message</th><th>Dynamic Response</th><th>Reason</th>
                   </tr>
                 </thead>
                 <tbody id="customReportTableBody"></tbody>
