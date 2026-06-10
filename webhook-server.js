@@ -8,6 +8,7 @@ const PORT = Number(process.env.PORT || process.env.WEBHOOK_PORT || 3002);
 const HOST = process.env.WEBHOOK_HOST || "0.0.0.0";
 const MONGODB_URI = process.env.DATABASE_URL || process.env.MONGODB_URI;
 const MONGODB_DB_NAME = process.env.MONGODB_DB_NAME || "";
+const MONGODB_WEBHOOK_DB_NAME = process.env.MONGODB_WEBHOOK_DB_NAME || "msg91_webhooks";
 const SERVICE_NAME = "crm-msg91-webhook";
 
 if (!MONGODB_URI) {
@@ -17,6 +18,7 @@ if (!MONGODB_URI) {
 
 let mongoClient;
 let mongoDb;
+let webhookEventsDb;
 
 function parseMaybeJson(value) {
   if (value === undefined || value === null || value === "") return value;
@@ -431,8 +433,9 @@ async function initMongo() {
   mongoClient = new MongoClient(MONGODB_URI, { serverSelectionTimeoutMS: 10000 });
   await mongoClient.connect();
   mongoDb = MONGODB_DB_NAME ? mongoClient.db(MONGODB_DB_NAME) : mongoClient.db();
+  webhookEventsDb = MONGODB_WEBHOOK_DB_NAME ? mongoClient.db(MONGODB_WEBHOOK_DB_NAME) : mongoDb;
 
-  const webhookEvents = mongoDb.collection("whatsapp_webhook_events");
+  const webhookEvents = webhookEventsDb.collection("whatsapp_webhook_events");
   await safeCreateIndex(webhookEvents, { receivedAt: -1 });
   await safeCreateIndex(webhookEvents, { source: 1, receivedAt: -1 });
   await safeCreateIndex(webhookEvents, { source: 1, sourceEventId: 1 });
@@ -738,7 +741,7 @@ async function storeWebhook(body, context = {}) {
     return { insertedCount: 0, matchedCount: 0, ignoredCount: rawItems.length };
   }
 
-  const webhookEvents = mongoDb.collection("whatsapp_webhook_events");
+  const webhookEvents = webhookEventsDb.collection("whatsapp_webhook_events");
 
   // Primary dedup: eventKey (SHA256 of all identifying fields including uuid).
   // Secondary dedup: stableKey for inbound events — catches MSG91 webhook

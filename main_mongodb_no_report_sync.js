@@ -83,6 +83,7 @@ let db;
 let msg91ConfigCache = null;
 let mongoClient = null;
 let mongoDb = null;
+let webhookEventsDb = null;
 let tray = null;
 let webhookServer = null;
 let isQuitting = false;
@@ -1034,19 +1035,29 @@ function getMongoConfig() {
     process.env.MONGODB_DB_NAME ||
     "ipkwealth_crm_test";
 
-  return { uri: String(uri).trim(), dbName: String(dbName).trim() };
+  const webhookDbName =
+    envValues.MONGODB_WEBHOOK_DB_NAME ||
+    process.env.MONGODB_WEBHOOK_DB_NAME ||
+    "msg91_webhooks";
+
+  return {
+    uri: String(uri).trim(),
+    dbName: String(dbName).trim(),
+    webhookDbName: String(webhookDbName).trim(),
+  };
 }
 
 async function initMongo() {
   if (mongoDb && mongoClient) return mongoDb;
 
-  const { uri, dbName } = getMongoConfig();
+  const { uri, dbName, webhookDbName } = getMongoConfig();
 
   if (!uri) {
     console.error(
       "MongoDB URI missing. Set MONGODB_URI or DATABASE_URL in .env",
     );
     mongoDb = null;
+    webhookEventsDb = null;
     return null;
   }
 
@@ -1071,6 +1082,7 @@ async function initMongo() {
     await mongoClient.connect();
 
     mongoDb = mongoClient.db(dbName);
+    webhookEventsDb = mongoClient.db(webhookDbName);
 
     await mongoDb.command({ ping: 1 });
 
@@ -1102,55 +1114,55 @@ async function initMongo() {
       updatedAt: -1,
     });
 
-    await safeCreateIndex(mongoDb.collection("whatsapp_webhook_events"), {
+    await safeCreateIndex(webhookEventsDb.collection("whatsapp_webhook_events"), {
       receivedAt: -1,
     });
 
-    await safeCreateIndex(mongoDb.collection("whatsapp_webhook_events"), {
+    await safeCreateIndex(webhookEventsDb.collection("whatsapp_webhook_events"), {
       matchedUploadId: 1,
       receivedAt: -1,
     });
 
-    await safeCreateIndex(mongoDb.collection("whatsapp_webhook_events"), {
+    await safeCreateIndex(webhookEventsDb.collection("whatsapp_webhook_events"), {
       uploadId: 1,
       receivedAt: -1,
     });
 
-    await safeCreateIndex(mongoDb.collection("whatsapp_webhook_events"), {
+    await safeCreateIndex(webhookEventsDb.collection("whatsapp_webhook_events"), {
       source: 1,
       receivedAt: -1,
     });
 
-    await safeCreateIndex(mongoDb.collection("whatsapp_webhook_events"), {
+    await safeCreateIndex(webhookEventsDb.collection("whatsapp_webhook_events"), {
       source: 1,
       sourceEventId: 1,
     });
 
-    await safeCreateIndex(mongoDb.collection("whatsapp_webhook_events"), {
+    await safeCreateIndex(webhookEventsDb.collection("whatsapp_webhook_events"), {
       normalizedMobile: 1,
       receivedAt: -1,
     });
 
-    await safeCreateIndex(mongoDb.collection("whatsapp_webhook_events"), {
+    await safeCreateIndex(webhookEventsDb.collection("whatsapp_webhook_events"), {
       eventType: 1,
       normalizedStatus: 1,
       receivedAt: -1,
     });
 
     await safeCreateIndex(
-      mongoDb.collection("whatsapp_webhook_events"),
+      webhookEventsDb.collection("whatsapp_webhook_events"),
       { eventKey: 1 },
       { unique: true },
     );
 
     await safeCreateIndex(
-      mongoDb.collection("whatsapp_webhook_events"),
+      webhookEventsDb.collection("whatsapp_webhook_events"),
       { stableKey: 1 },
       { sparse: true },
     );
 
     await safeCreateIndex(
-      mongoDb.collection("whatsapp_webhook_events"),
+      webhookEventsDb.collection("whatsapp_webhook_events"),
       { source: 1, stableKey: 1 },
       {
         unique: true,
@@ -1160,7 +1172,7 @@ async function initMongo() {
       },
     );
 
-    await safeCreateIndex(mongoDb.collection("whatsapp_webhook_events"), {
+    await safeCreateIndex(webhookEventsDb.collection("whatsapp_webhook_events"), {
       modifiedAt: -1,
     });
 
@@ -1189,6 +1201,7 @@ async function initMongo() {
     console.error(error);
 
     mongoDb = null;
+    webhookEventsDb = null;
 
     if (mongoClient) {
       try {
@@ -1538,7 +1551,8 @@ async function getExistingMaxCounterValue(name) {
   if (!config) return 0;
 
   let maxValue = 0;
-  const collection = mongoDb.collection(config.collectionName);
+  const targetDb = name === "webhook_events" ? webhookEventsDb : mongoDb;
+  const collection = targetDb.collection(config.collectionName);
 
   for (const field of config.fields) {
     const row = await collection
@@ -1609,7 +1623,7 @@ async function getNumbersCollection() {
 
 async function getWebhookEventsCollection() {
   if (!mongoDb) throw new Error("MongoDB is not connected.");
-  return mongoDb.collection("whatsapp_webhook_events");
+  return webhookEventsDb.collection("whatsapp_webhook_events");
 }
 
 function normalizeMongoDoc(doc) {
@@ -1922,7 +1936,7 @@ async function updateNumberFieldsWithInc(numberId, fields, inc = null) {
 async function hasProcessedRemoteEvent(sourceEventId) {
   if (!sourceEventId) return false;
   await requireMongoDb();
-  const row = await mongoDb
+  const row = await webhookEventsDb
     .collection("whatsapp_webhook_events")
     .findOne(
       { sourceEventId: String(sourceEventId) },
@@ -1933,7 +1947,7 @@ async function hasProcessedRemoteEvent(sourceEventId) {
 
 async function upsertWebhookEventDoc(doc) {
   await requireMongoDb();
-  const webhooks = mongoDb.collection("whatsapp_webhook_events");
+  const webhooks = webhookEventsDb.collection("whatsapp_webhook_events");
   const now = new Date().toISOString();
 
   if (doc.rawPayload && typeof doc.rawPayload === "string") {
@@ -2226,7 +2240,7 @@ async function listCustomReportRowsFromMongo(filters = {}) {
     ];
   }
 
-  const events = await mongoDb
+  const events = await webhookEventsDb
     .collection("whatsapp_webhook_events")
     .find(query)
     .sort({ receivedAt: -1, statusUpdatedAt: -1, updatedAt: -1, _id: -1 })
@@ -4172,7 +4186,7 @@ async function getInboundReplyMapForUpload(uploadId) {
     ];
   });
 
-  const events = await mongoDb
+  const events = await webhookEventsDb
     .collection("whatsapp_webhook_events")
     .find({
       eventType: "inbound",
@@ -5808,6 +5822,7 @@ app.on("before-quit", () => {
     mongoClient.close().catch(() => {});
     mongoClient = null;
     mongoDb = null;
+    webhookEventsDb = null;
   }
 });
 
