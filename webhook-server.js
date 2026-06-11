@@ -916,7 +916,9 @@ async function main() {
       res.json({ received: true, ...result });
     } catch (error) {
       console.error("Webhook processing failed:", error);
-      res.status(500).json({ received: false, error: error.message || String(error) });
+      // Always ack with 2XX so MSG91 doesn't retry/auto-pause on internal
+      // processing errors — log the error for our own debugging instead.
+      res.status(200).json({ received: true, error: error.message || String(error) });
     }
   });
 
@@ -928,7 +930,9 @@ async function main() {
       res.json({ received: true, ...result });
     } catch (error) {
       console.error("Inbound webhook processing failed:", error);
-      res.status(500).json({ received: false, error: error.message || String(error) });
+      // Always ack with 2XX so MSG91 doesn't retry/auto-pause on internal
+      // processing errors — log the error for our own debugging instead.
+      res.status(200).json({ received: true, error: error.message || String(error) });
     }
   });
 
@@ -940,7 +944,9 @@ async function main() {
       res.json({ received: true, ...result });
     } catch (error) {
       console.error("Outbound webhook processing failed:", error);
-      res.status(500).json({ received: false, error: error.message || String(error) });
+      // Always ack with 2XX so MSG91 doesn't retry/auto-pause on internal
+      // processing errors — log the error for our own debugging instead.
+      res.status(200).json({ received: true, error: error.message || String(error) });
     }
   });
 
@@ -957,7 +963,9 @@ async function main() {
       res.json({ received: true, ...result });
     } catch (error) {
       console.error("Template upload webhook processing failed:", error);
-      res.status(500).json({ received: false, error: error.message || String(error) });
+      // Always ack with 2XX so MSG91 doesn't retry/auto-pause on internal
+      // processing errors — log the error for our own debugging instead.
+      res.status(200).json({ received: true, error: error.message || String(error) });
     }
   });
 
@@ -970,7 +978,9 @@ async function main() {
       res.json({ received: true, ...result });
     } catch (error) {
       console.error("Template webhook processing failed:", error);
-      res.status(500).json({ received: false, error: error.message || String(error) });
+      // Always ack with 2XX so MSG91 doesn't retry/auto-pause on internal
+      // processing errors — log the error for our own debugging instead.
+      res.status(200).json({ received: true, error: error.message || String(error) });
     }
   });
 
