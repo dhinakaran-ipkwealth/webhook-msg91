@@ -97,17 +97,18 @@ function inferEventType(item, context = {}) {
   if (direction === "0") return "inbound";
   if (direction === "1") return "outbound";
 
-  const webhookType = String(
+  const payloadWebhookType = String(
     item.webhookType ||
       item.webhook_type ||
       item.eventType ||
       item.event_type ||
-      context.webhookType ||
       "",
   ).toLowerCase();
+  const contextWebhookType = String(context.webhookType || "").toLowerCase();
+  const webhookType = payloadWebhookType || contextWebhookType;
 
-  if (webhookType.includes("inbound") || webhookType.includes("incoming")) return "inbound";
-  if (webhookType.includes("outbound") || webhookType.includes("report")) return "outbound";
+  if (payloadWebhookType.includes("inbound") || payloadWebhookType.includes("incoming")) return "inbound";
+  if (payloadWebhookType.includes("outbound") || payloadWebhookType.includes("report")) return "outbound";
 
   const contentType = String(item.contentType || item.content_type || "").toLowerCase();
   const messageType = String(item.messageType || item.message_type || "").toLowerCase();
@@ -122,6 +123,7 @@ function inferEventType(item, context = {}) {
     item.interactive ||
     item.reaction ||
     item.contacts ||
+    item.messages ||
     item.caption ||
     item.url ||
     item.clickedUrl ||
@@ -146,6 +148,9 @@ function inferEventType(item, context = {}) {
   ) {
     return "inbound";
   }
+
+  if (contextWebhookType.includes("inbound") || contextWebhookType.includes("incoming")) return "inbound";
+  if (contextWebhookType.includes("outbound") || contextWebhookType.includes("report")) return "outbound";
 
   return "outbound";
 }
@@ -877,6 +882,30 @@ async function notifyElectronApp(payload = {}) {
   } catch {}
 }
 
+function ackMsg91Webhook(res, extra = {}) {
+  if (res.headersSent) return;
+  res.status(200).json({ received: true, ...extra });
+}
+
+function processWebhookAfterAck(body, context, notifyPayload, label) {
+  storeWebhook(body, context)
+    .then((result) => {
+      notifyElectronApp({
+        ...notifyPayload,
+        insertedCount: result.insertedCount,
+        appliedCount: result.appliedCount,
+      });
+      console.log(`${label} processed`, {
+        insertedCount: result.insertedCount,
+        matchedCount: result.matchedCount,
+        appliedCount: result.appliedCount,
+      });
+    })
+    .catch((error) => {
+      console.error(`${label} processing failed:`, error);
+    });
+}
+
 async function main() {
   await initMongo();
 
@@ -884,12 +913,21 @@ async function main() {
   app.use(express.json({ limit: "10mb" }));
   app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
+  // Body-parser errors (malformed JSON, etc.) throw before reaching route
+  // handlers and would otherwise yield a 400 from Express's default handler.
+  // MSG91 auto-pauses webhooks on non-2XX, so ack with 200 here too.
+  app.use((err, req, res, next) => {
+    if (res.headersSent) return next(err);
+    console.error("Body parse error:", err && err.message);
+    res.status(200).json({ received: true, error: (err && err.message) || String(err) });
+  });
+
   app.get("/health", (req, res) => {
-    res.json({ ok: true, service: SERVICE_NAME, mongoConnected: Boolean(mongoDb) });
+    res.status(200).json({ ok: true, service: SERVICE_NAME, mongoConnected: Boolean(mongoDb) });
   });
 
   app.get("/webhook", (req, res) => {
-    res.json({
+    res.status(200).json({
       ok: true,
       service: SERVICE_NAME,
       message: "MSG91 must call this endpoint using POST.",
@@ -905,49 +943,25 @@ async function main() {
     const normalised = items.map((item) => normalizeWebhookItem(item, { webhookType: "debug" }));
     console.log("[debug-webhook] raw body:", JSON.stringify(body, null, 2));
     console.log("[debug-webhook] normalised items:", JSON.stringify(normalised.map(({ eventType, normalizedStatus, normalizedMobile, requestId, text }) => ({ eventType, normalizedStatus, normalizedMobile, requestId, text })), null, 2));
-    res.json({ received: true, itemCount: items.length, normalised: normalised.map(({ eventType, normalizedStatus, normalizedMobile, requestId, text }) => ({ eventType, normalizedStatus, normalizedMobile, requestId, text })) });
+    res.status(200).json({ received: true, itemCount: items.length, normalised: normalised.map(({ eventType, normalizedStatus, normalizedMobile, requestId, text }) => ({ eventType, normalizedStatus, normalizedMobile, requestId, text })) });
   });
 
   app.post("/webhook", async (req, res) => {
     console.log(`[webhook] POST /webhook from ${req.ip} — body keys: ${Object.keys(req.body || {}).join(", ")}`);
-    try {
-      const result = await storeWebhook(req.body, { webhookType: "msg91" });
-      notifyElectronApp({ uploadId: null, insertedCount: result.insertedCount });
-      res.json({ received: true, ...result });
-    } catch (error) {
-      console.error("Webhook processing failed:", error);
-      // Always ack with 2XX so MSG91 doesn't retry/auto-pause on internal
-      // processing errors — log the error for our own debugging instead.
-      res.status(200).json({ received: true, error: error.message || String(error) });
-    }
+    ackMsg91Webhook(res);
+    processWebhookAfterAck(req.body, { webhookType: "msg91" }, { uploadId: null }, "Webhook");
   });
 
   app.post("/webhook/msg91/inbound", async (req, res) => {
     console.log(`[webhook] POST /webhook/msg91/inbound from ${req.ip} — body keys: ${Object.keys(req.body || {}).join(", ")}`);
-    try {
-      const result = await storeWebhook(req.body, { webhookType: "inbound" });
-      notifyElectronApp({ uploadId: null, insertedCount: result.insertedCount });
-      res.json({ received: true, ...result });
-    } catch (error) {
-      console.error("Inbound webhook processing failed:", error);
-      // Always ack with 2XX so MSG91 doesn't retry/auto-pause on internal
-      // processing errors — log the error for our own debugging instead.
-      res.status(200).json({ received: true, error: error.message || String(error) });
-    }
+    ackMsg91Webhook(res);
+    processWebhookAfterAck(req.body, { webhookType: "inbound" }, { uploadId: null }, "Inbound webhook");
   });
 
   app.post("/webhook/msg91/outbound", async (req, res) => {
     console.log(`[webhook] POST /webhook/msg91/outbound from ${req.ip} — body keys: ${Object.keys(req.body || {}).join(", ")}`);
-    try {
-      const result = await storeWebhook(req.body, { webhookType: "outbound_report" });
-      notifyElectronApp({ uploadId: null, insertedCount: result.insertedCount });
-      res.json({ received: true, ...result });
-    } catch (error) {
-      console.error("Outbound webhook processing failed:", error);
-      // Always ack with 2XX so MSG91 doesn't retry/auto-pause on internal
-      // processing errors — log the error for our own debugging instead.
-      res.status(200).json({ received: true, error: error.message || String(error) });
-    }
+    ackMsg91Webhook(res);
+    processWebhookAfterAck(req.body, { webhookType: "outbound_report" }, { uploadId: null }, "Outbound webhook");
   });
 
   app.post("/webhook/msg91/:templateName/:uploadId", async (req, res) => {
@@ -957,30 +971,22 @@ async function main() {
       webhookType: "outbound_report",
     };
     console.log(`[webhook] POST /webhook/msg91/${req.params.templateName}/${req.params.uploadId} from ${req.ip}`);
-    try {
-      const result = await storeWebhook(req.body, ctx);
-      notifyElectronApp({ uploadId: ctx.uploadId, insertedCount: result.insertedCount });
-      res.json({ received: true, ...result });
-    } catch (error) {
-      console.error("Template upload webhook processing failed:", error);
-      // Always ack with 2XX so MSG91 doesn't retry/auto-pause on internal
-      // processing errors — log the error for our own debugging instead.
-      res.status(200).json({ received: true, error: error.message || String(error) });
-    }
+    ackMsg91Webhook(res);
+    processWebhookAfterAck(req.body, ctx, { uploadId: ctx.uploadId }, "Template upload webhook");
   });
 
   app.post("/webhook/msg91/:templateName", async (req, res) => {
     const ctx = { templateName: req.params.templateName, webhookType: "outbound_report" };
     console.log(`[webhook] POST /webhook/msg91/${req.params.templateName} from ${req.ip}`);
-    try {
-      const result = await storeWebhook(req.body, ctx);
-      notifyElectronApp({ uploadId: null, insertedCount: result.insertedCount });
-      res.json({ received: true, ...result });
-    } catch (error) {
-      console.error("Template webhook processing failed:", error);
-      // Always ack with 2XX so MSG91 doesn't retry/auto-pause on internal
-      // processing errors — log the error for our own debugging instead.
-      res.status(200).json({ received: true, error: error.message || String(error) });
+    ackMsg91Webhook(res);
+    processWebhookAfterAck(req.body, ctx, { uploadId: null }, "Template webhook");
+  });
+
+  app.all(/^\/webhook(?:\/.*)?$/, (req, res) => {
+    console.log(`[webhook] ${req.method} ${req.originalUrl} from ${req.ip} matched fallback`);
+    ackMsg91Webhook(res, { fallback: true });
+    if (req.method === "POST") {
+      processWebhookAfterAck(req.body, { webhookType: "msg91" }, { uploadId: null }, "Fallback webhook");
     }
   });
 

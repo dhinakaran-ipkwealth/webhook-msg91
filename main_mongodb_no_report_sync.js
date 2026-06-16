@@ -5508,6 +5508,8 @@ ipcMain.handle("send-messages", async (event, options) => {
 
   return {
     message: `${validRows.length} message(s) sent to MSG91.`,
+    apiStatusCode: response.status,
+    apiStatusText: response.statusText,
     apiMessageId,
     responseData,
   };
@@ -5668,7 +5670,13 @@ ipcMain.handle("retry-failed", async (event, uploadId) => {
   );
   await updateUploadStatus(uploadId);
   sendStateUpdate();
-  return { message: "Retry request sent.", apiMessageId, responseData };
+  return {
+    message: "Retry request sent.",
+    apiStatusCode: response.status,
+    apiStatusText: response.statusText,
+    apiMessageId,
+    responseData,
+  };
 });
 
 ipcMain.handle("get-webhook-url", async () => {

@@ -193,7 +193,7 @@ sendButton.addEventListener("click", async () => {
       columnMapping,
     });
     customFiltersTouched = false;
-    showAlert(`Send queued: ${result.message}`, "success");
+    showAlert(formatMsg91SendAlert(result), "success");
     await refreshUploads();
   } catch (err) {
     showAlert(`Send failed: ${err.message}`, "error");
@@ -590,6 +590,16 @@ function showAlert(message, type = "info", duration = 6000) {
   if (duration > 0) {
     setTimeout(() => removeAlertElement(alertElement), duration);
   }
+}
+
+function formatMsg91SendAlert(result = {}) {
+  const statusCode = Number(result.apiStatusCode || result.statusCode || 0);
+  const statusText = result.apiStatusText || result.statusText || "";
+  const statusLabel = statusCode
+    ? `${statusCode}${statusText ? ` ${statusText}` : ""}`
+    : "success";
+  const detail = result.message || "Message request sent to MSG91.";
+  return `MSG91 accepted the template send with HTTP ${statusLabel}.\n${detail}`;
 }
 
 function parseStoredRowData(row) {
@@ -1162,7 +1172,7 @@ function renderUploadTable(uploads) {
       if (event.target.dataset.retryId) {
         try {
           const result = await window.electronAPI.retryFailed(uploadId);
-          showAlert(result.message, "success");
+          showAlert(formatMsg91SendAlert(result), "success");
           await refreshUploads();
         } catch (err) {
           showAlert(`Retry failed: ${err.message}`, "error");
