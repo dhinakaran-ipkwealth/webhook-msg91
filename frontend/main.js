@@ -1527,7 +1527,7 @@ function createWindow() {
     mainWindow = null;
   });
 
-  mainWindow.loadFile(path.join(__dirname, "index_modern_saas_complete.html"));
+  mainWindow.loadFile(path.join(__dirname, "index.html"));
 }
 
 async function getCounterMaxConfig(name) {

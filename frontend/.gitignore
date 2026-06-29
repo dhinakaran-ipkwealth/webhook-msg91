@@ -1,0 +1,6 @@
+.env
+electron-test.out.log
+electron-test.err.log
+node_modules
+.env.example
+dist/

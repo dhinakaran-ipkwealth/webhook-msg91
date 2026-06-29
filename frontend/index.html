@@ -1,0 +1,660 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MSG91 Webhook Console</title>
+    <style>
+      :root {
+        --bg: #f6f8fb;
+        --panel: #ffffff;
+        --line: #dbe3ef;
+        --text: #142033;
+        --muted: #627089;
+        --primary: #2563eb;
+        --primary-soft: #eaf1ff;
+        --good: #0f9f6e;
+        --good-soft: #e8f8f1;
+        --bad: #dc2626;
+        --bad-soft: #fff0f0;
+        --warn: #b7791f;
+        --warn-soft: #fff8e6;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--text);
+        font-family: "Segoe UI", Arial, sans-serif;
+      }
+
+      .app-layout {
+        display: grid;
+        grid-template-columns: 248px minmax(0, 1fr);
+        min-height: 100vh;
+      }
+
+      .sidebar {
+        background: #101827;
+        color: #d7deea;
+        padding: 22px;
+        display: flex;
+        flex-direction: column;
+        gap: 22px;
+      }
+
+      .sidebar-brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 18px;
+        font-weight: 800;
+      }
+
+      .brand-mark {
+        width: 34px;
+        height: 34px;
+        border-radius: 8px;
+        display: grid;
+        place-items: center;
+        background: var(--primary);
+        color: #fff;
+        font-weight: 900;
+      }
+
+      .nav-menu { display: grid; gap: 8px; }
+
+      .nav-item {
+        height: 40px;
+        padding: 0 12px;
+        border: 0;
+        border-radius: 8px;
+        background: transparent;
+        color: #aab7ca;
+        text-align: left;
+        cursor: pointer;
+        font-weight: 700;
+      }
+
+      .nav-item.active,
+      .nav-item:hover {
+        background: #1f2d42;
+        color: #fff;
+      }
+
+      .sidebar-footer {
+        margin-top: auto;
+        font-size: 12px;
+        color: #98a6bb;
+        line-height: 1.5;
+      }
+
+      .main-content {
+        min-width: 0;
+        padding: 24px;
+        overflow: auto;
+      }
+
+      .top-header {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        align-items: flex-start;
+        margin-bottom: 18px;
+      }
+
+      h1, h2, h3, h4, p { margin-top: 0; }
+
+      h1 { margin-bottom: 4px; font-size: 26px; }
+      h3 { margin-bottom: 14px; font-size: 18px; }
+
+      .small-note {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .top-header-status,
+      .info-box,
+      .delivery-note,
+      .reply-capture-bar {
+        border: 1px solid var(--line);
+        background: var(--panel);
+        border-radius: 8px;
+        padding: 12px 14px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .top-header-status { max-width: 560px; }
+
+      .section {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 18px;
+        margin-bottom: 18px;
+      }
+
+      .grid-2 {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 16px;
+      }
+
+      .field-row {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+        margin-bottom: 10px;
+      }
+
+      label {
+        min-width: 128px;
+        font-weight: 700;
+        color: #334155;
+        font-size: 13px;
+      }
+
+      input, select, textarea {
+        min-height: 38px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 8px 10px;
+        font: inherit;
+        min-width: 190px;
+        background: #fff;
+        color: var(--text);
+      }
+
+      input[type="file"] { padding: 7px; }
+      input.visually-hidden-file {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        white-space: nowrap;
+        clip-path: inset(50%);
+      }
+      textarea { width: 100%; min-height: 82px; }
+
+      button {
+        min-height: 38px;
+        border: 0;
+        border-radius: 8px;
+        padding: 0 14px;
+        background: var(--primary);
+        color: #fff;
+        font-weight: 800;
+        cursor: pointer;
+      }
+
+      button.secondary-button {
+        background: #fff;
+        color: #334155;
+        border: 1px solid var(--line);
+      }
+
+      button.small-button {
+        min-height: 31px;
+        padding: 0 10px;
+        font-size: 12px;
+      }
+
+      button:disabled {
+        opacity: .55;
+        cursor: not-allowed;
+      }
+
+      .summary-grid,
+      .validation-panel,
+      .split-panel {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 12px;
+        margin: 12px 0;
+      }
+
+      .summary-item,
+      .validation-card,
+      .split-card,
+      .split-guidance {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        padding: 14px;
+      }
+
+      .summary-item strong,
+      .validation-card strong,
+      .split-card strong {
+        display: block;
+        font-size: 24px;
+        margin-top: 4px;
+      }
+
+      .valid { border-left: 4px solid var(--good); }
+      .invalid { border-left: 4px solid var(--bad); }
+      .split-card-india { border-left: 4px solid var(--primary); }
+      .split-card-foreign { border-left: 4px solid var(--good); }
+
+      .table-wrap {
+        width: 100%;
+        max-height: min(62vh, 620px);
+        overflow-x: auto;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        min-width: 900px;
+        table-layout: auto;
+      }
+
+      #customReportTable { min-width: 2100px; }
+
+      th, td {
+        border-bottom: 1px solid var(--line);
+        padding: 10px;
+        text-align: left;
+        vertical-align: top;
+        font-size: 13px;
+      }
+
+      th {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        background: #eef3f9;
+        color: #475569;
+        font-size: 11px;
+        text-transform: uppercase;
+      }
+
+      .mobile-pill,
+      .template-tag,
+      .badge,
+      .region-pill {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        padding: 4px 8px;
+        font-weight: 800;
+        font-size: 12px;
+        white-space: nowrap;
+      }
+
+      .mobile-pill { background: #eef2f7; font-family: Consolas, monospace; }
+      .template-tag { background: var(--primary-soft); color: #174ea6; }
+      .badge-pending, .status-new { background: var(--warn-soft); color: var(--warn); }
+      .badge-sent, .status-sent, .status-reporting { background: var(--primary-soft); color: #174ea6; }
+      .badge-delivered, .badge-replied, .status-completed { background: var(--good-soft); color: var(--good); }
+      .badge-failed, .status-partial { background: var(--bad-soft); color: var(--bad); }
+      .region-india { background: var(--primary-soft); color: #174ea6; }
+      .region-foreign { background: var(--good-soft); color: var(--good); }
+      .region-invalid { background: var(--bad-soft); color: var(--bad); }
+
+      .raw-cell {
+        max-height: 120px;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+        background: #f8fafc;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 8px;
+        font-family: Consolas, monospace;
+        font-size: 12px;
+      }
+
+      .reply-cell-highlight { background: var(--good-soft); border-color: #9ee0c2; }
+
+      .filter-row {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        align-items: center;
+        margin-bottom: 12px;
+        padding: 12px;
+        background: #f8fafc;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+      }
+
+      .tab-content { display: none; }
+      .tab-content.active { display: block; }
+      .hidden { display: none !important; }
+
+      #saasAlertContainer {
+        position: fixed;
+        top: 16px;
+        right: 16px;
+        display: grid;
+        gap: 8px;
+        z-index: 30;
+      }
+
+      .saas-alert {
+        display: grid;
+        grid-template-columns: 28px minmax(0, 1fr) 24px;
+        gap: 10px;
+        align-items: start;
+        background: #fff;
+        border: 1px solid var(--line);
+        border-left: 4px solid var(--primary);
+        border-radius: 8px;
+        padding: 12px;
+        box-shadow: 0 8px 24px rgba(15, 23, 42, .14);
+        max-width: 460px;
+        white-space: pre-line;
+        opacity: 0;
+        transform: translateY(-6px);
+        transition: opacity .16s ease, transform .16s ease;
+      }
+
+      .saas-alert.show { opacity: 1; transform: translateY(0); }
+      .saas-alert-error { border-left-color: var(--bad); }
+      .saas-alert-success { border-left-color: var(--good); }
+      .saas-alert-warning { border-left-color: var(--warn); }
+      .alert-icon {
+        width: 24px;
+        height: 24px;
+        border-radius: 8px;
+        display: grid;
+        place-items: center;
+        background: var(--primary-soft);
+        color: var(--primary);
+        font-weight: 900;
+      }
+      .alert-message { color: var(--text); font-size: 13px; line-height: 1.45; }
+      .alert-close {
+        min-height: 24px;
+        width: 24px;
+        padding: 0;
+        background: transparent;
+        color: var(--muted);
+      }
+
+      .modal-backdrop {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(15, 23, 42, .45);
+        z-index: 40;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+      }
+
+      .modal-backdrop.show,
+      .modal-backdrop[aria-hidden="false"] { display: flex; }
+
+      .modal {
+        width: min(960px, 96vw);
+        max-height: 86vh;
+        overflow: auto;
+        background: #fff;
+        border-radius: 8px;
+        border: 1px solid var(--line);
+        padding: 18px;
+      }
+
+      #jsonModalContent {
+        white-space: pre-wrap;
+        background: #0f172a;
+        color: #e2e8f0;
+        border-radius: 8px;
+        padding: 14px;
+        overflow: auto;
+        max-height: 68vh;
+      }
+
+      @media (max-width: 980px) {
+        .app-layout { grid-template-columns: 1fr; }
+        .sidebar { position: static; }
+        .main-content { padding: 16px; }
+        .grid-2 { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="saasAlertContainer"></div>
+    <div class="app-layout">
+      <aside class="sidebar">
+        <div class="sidebar-brand"><span class="brand-mark">M</span><span>MSG91 Console</span></div>
+        <nav class="nav-menu">
+          <button class="nav-item active" data-target="tab-dashboard">Dashboard</button>
+          <button class="nav-item" data-target="tab-upload">Upload & Send</button>
+          <button class="nav-item" data-target="tab-delivery">Delivery Report</button>
+          <button class="nav-item" data-target="tab-webhook">Webhook Report</button>
+        </nav>
+        <div class="sidebar-footer">
+          <div id="webhookInfo">Webhook endpoint loading...</div>
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <header class="top-header">
+          <div>
+            <h1>WhatsApp Bulk Sender</h1>
+            <p class="small-note">Local Electron UI backed by MongoDB and the EC2 PM2 MSG91 webhook service.</p>
+          </div>
+          <div id="configStatus" class="top-header-status">Checking MSG91 and MongoDB configuration...</div>
+        </header>
+
+        <section id="tab-dashboard" class="tab-content active">
+          <div class="section">
+            <h3>Dashboard</h3>
+            <div class="field-row">
+              <button id="refreshButton">Refresh Dashboard</button>
+              <span id="currentUploadLabel" class="small-note">No upload selected.</span>
+            </div>
+            <div id="uploadsSummary" class="summary-grid"></div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>#</th><th>File</th><th>Total</th><th>Valid</th><th>Invalid</th><th>Delivered</th><th>Failed</th><th>Status</th><th>Created</th><th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="uploadTableBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section id="tab-upload" class="tab-content">
+          <div class="section">
+            <h3>Upload CSV/XLSX</h3>
+            <div class="field-row">
+              <input id="csvInput" class="visually-hidden-file" type="file" accept=".csv,.xlsx,.xls" />
+              <button id="chooseFileButton">Import File</button>
+              <input id="uploadPhoneSearch" type="text" placeholder="Search uploaded phone" />
+              <input id="previewPhoneSearch" type="text" placeholder="Search preview phone" />
+            </div>
+            <div id="previewSummary" class="small-note">Import a file to preview recipients.</div>
+            <div id="validationPanel" class="validation-panel hidden">
+              <div class="validation-card"><span>Total</span><strong id="validationTotalCount">0</strong></div>
+              <div class="validation-card valid"><span>Valid</span><strong id="validationValidCount">0</strong></div>
+              <div class="validation-card invalid"><span>Invalid</span><strong id="validationInvalidCount">0</strong></div>
+            </div>
+            <div id="numberSplitPanel" class="split-panel hidden">
+              <div class="split-card split-card-india">
+                <span class="split-label">Indian Batch</span>
+                <strong id="indianSplitCount">0</strong>
+                <button id="exportIndianCsvButton" class="secondary-button small-button" disabled>Export Indian CSV</button>
+              </div>
+              <div class="split-card split-card-foreign">
+                <span class="split-label">Foreign Batch</span>
+                <strong id="foreignSplitCount">0</strong>
+                <button id="exportForeignCsvButton" class="secondary-button small-button" disabled>Export Foreign CSV</button>
+              </div>
+              <div class="split-guidance">Separate batches keep MSG91 webhook replies easier to trace by upload boundary.</div>
+            </div>
+            <div id="validationLists" class="validation-lists hidden">
+              <h4>Invalid Numbers</h4>
+              <div class="table-wrap">
+                <table><thead><tr><th>Row</th><th>Original</th><th>Cleaned</th><th>Reason</th></tr></thead><tbody id="invalidNumberTableBody"></tbody></table>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>#</th><th>Status</th><th>Region</th><th>Phone</th><th>Delivery</th><th>Retries</th><th>Updated</th><th>CSV Row</th></tr></thead>
+                <tbody id="previewTableBody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="section">
+            <h3>Template & Send</h3>
+            <div class="grid-2">
+              <div>
+                <div class="field-row"><label>Sender number</label><select id="numberSelect"></select></div>
+                <div class="field-row"><label>Template</label><select id="templateSelect"></select></div>
+                <div id="templateDescription" class="small-note"></div>
+              </div>
+              <div>
+                <div id="mappingSummary" class="small-note">Map template variables after selecting a template.</div>
+                <div class="table-wrap">
+                  <table><thead><tr><th>Variable</th><th>CSV Column</th><th>Static Value</th></tr></thead><tbody id="mappingTableBody"></tbody></table>
+                </div>
+              </div>
+            </div>
+            <div class="field-row">
+              <button id="sendButton">Send Messages</button>
+            </div>
+          </div>
+        </section>
+
+        <section id="tab-delivery" class="tab-content">
+          <div class="section">
+            <h3>Selected Upload Delivery Report</h3>
+            <div class="reply-capture-bar">
+              <strong id="deliveryContextSummary">Select an upload to see delivery and reply status.</strong>
+              <span id="deliveryReplySummary">No rows loaded.</span>
+            </div>
+            <div class="field-row">
+              <input id="deliveryPhoneSearch" type="text" placeholder="Search delivery phone" />
+              <button id="deliveryReportRefreshButton" class="secondary-button">
+                <span id="deliveryReportRefreshIcon">⟳</span>
+                <span id="deliveryReportRefreshLabel">Refresh Report</span>
+              </button>
+            </div>
+            <div class="delivery-note">Replies are read from `whatsapp_sender_reports`, `whatsapp_numbers`, and `whatsapp_webhook_events` written by the EC2 PM2 webhook service.</div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>#</th><th>Mobile</th><th>Sent Message</th><th>Delivery</th><th>Customer Reply</th><th>Reply Time</th><th>Request ID</th></tr></thead>
+                <tbody id="reportTableBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section id="tab-webhook" class="tab-content">
+          <div class="section">
+            <h3>MSG91 Webhook Report <button id="customReportHelp" class="secondary-button small-button">Help</button></h3>
+            <div class="filter-row">
+              <select id="customScope"><option value="all">All transactions + webhook events</option><option value="selected">Selected upload report</option></select>
+              <select id="customNumberFilter"><option value="all">All sender numbers</option></select>
+              <select id="customTemplateFilter"><option value="all">All templates</option></select>
+              <select id="customRangePreset"><option value="day">Today</option><option value="yesterday">Yesterday</option><option value="week">This week</option><option value="month">This month</option><option value="custom">Custom</option></select>
+              <input id="customDateTimeDisplay" type="text" readonly placeholder="Date range" />
+              <button id="customDateTimeOpen" class="secondary-button small-button">Range</button>
+              <select id="customEventType"><option value="all">All types</option><option value="outbound">Outbound</option><option value="inbound">Inbound</option></select>
+              <select id="customStatus"><option value="all">All statuses</option><option value="sent">Sent</option><option value="delivered">Delivered/Read</option><option value="failed">Failed</option><option value="inbound">Customer replies</option></select>
+              <input id="customSearch" type="text" placeholder="Search mobile, request, reply" />
+              <button id="customReportRefresh">Refresh Report</button>
+              <button id="customReportExport" class="secondary-button">Export Excel</button>
+              <button id="customReportEmailAdmin" class="secondary-button">Email Admin Report</button>
+              <button id="customReportEmailRMs" class="secondary-button">Email RM Reports</button>
+              <button id="customReportSchedule" class="secondary-button">Schedule</button>
+            </div>
+            <input id="customStartDateTime" type="hidden" />
+            <input id="customEndDateTime" type="hidden" />
+            <div id="customReportSummary" class="small-note">Open this tab to load webhook records.</div>
+            <div id="customReportSummaryGrid" class="summary-grid"></div>
+            <div class="table-wrap">
+              <table id="customReportTable">
+                <thead>
+                  <tr>
+                    <th>#</th><th>Received</th><th>Type</th><th>Status</th><th>Matched Status</th><th>IPK Sender</th><th>Mobile</th><th>Customer Name</th><th>Upload</th><th>Customer Reply</th><th>Reply Time</th><th>Template</th><th>Sent Message</th><th>Message</th><th>Dynamic Response</th><th>Reason</th>
+                  </tr>
+                </thead>
+                <tbody id="customReportTableBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="schedulePanel" class="modal-backdrop" aria-hidden="true">
+      <div class="modal">
+        <h3>Scheduled Report</h3>
+        <div class="field-row"><label>Enabled</label><input id="scheduleEnabled" type="checkbox" /></div>
+        <div class="field-row"><label>Time</label><input id="scheduleTime" type="time" value="10:00" /></div>
+        <div class="field-row"><label>Mechanism</label><select id="scheduleMechanism"><option value="email">Email</option><option value="export">Export file</option><option value="sftp">SFTP</option></select></div>
+        <div class="field-row">
+          <button id="scheduleSave">Save</button>
+          <button id="scheduleRunNow" class="secondary-button">Run Now</button>
+          <button id="scheduleClose" class="secondary-button">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="dateTimePickerBackdrop" class="modal-backdrop" aria-hidden="true">
+      <div class="modal">
+        <h3>Custom Date Range</h3>
+        <div class="grid-2">
+          <div>
+            <div class="field-row"><label>Start date</label><input id="customStartDateInput" type="date" /></div>
+            <div class="field-row"><label>Start time</label><input id="customStartTimeInput" type="time" /></div>
+          </div>
+          <div>
+            <div class="field-row"><label>End date</label><input id="customEndDateInput" type="date" /></div>
+            <div class="field-row"><label>End time</label><input id="customEndTimeInput" type="time" /></div>
+          </div>
+        </div>
+        <div class="field-row">
+          <button id="customDateTimeOk">Apply</button>
+          <button id="customDateTimeCancel" class="secondary-button">Cancel</button>
+          <button id="dateTimePickerClose" class="secondary-button">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="jsonModalBackdrop" class="modal-backdrop" aria-hidden="true">
+      <div class="modal">
+        <div class="field-row" style="justify-content: space-between;">
+          <h3>Payload JSON</h3>
+          <button id="jsonModalClose" class="secondary-button small-button">Close</button>
+        </div>
+        <pre id="jsonModalContent">{}</pre>
+      </div>
+    </div>
+
+    <script>
+      document.querySelectorAll(".nav-item[data-target]").forEach((button) => {
+        button.addEventListener("click", () => {
+          document.querySelectorAll(".nav-item").forEach((item) => item.classList.remove("active"));
+          document.querySelectorAll(".tab-content").forEach((item) => item.classList.remove("active"));
+          button.classList.add("active");
+          const target = document.getElementById(button.dataset.target);
+          if (target) target.classList.add("active");
+          document.dispatchEvent(new CustomEvent("app-tab-change", { detail: { targetId: button.dataset.target } }));
+        });
+      });
+    </script>
+    <script src="./renderer.js"></script>
+  </body>
+</html>

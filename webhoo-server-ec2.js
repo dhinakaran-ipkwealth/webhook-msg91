@@ -4,6 +4,12 @@ const crypto = require("crypto");
 const express = require("express");
 const { MongoClient } = require("mongodb");
 
+// ── middleware ──────────────────────────────────────────────────────────────
+const requestLogger = require("./middleware/request-logger");
+const { webhookLimiter, apiLimiter, rateLimitStatus } = require("./middleware/rate-limit");
+const { webhookDedupMiddleware, ensureDedupIndexes } = require("./middleware/webhook-dedup");
+const { getMetricsSnapshot } = require("./middleware/request-logger");
+
 const PORT = Number(process.env.PORT || process.env.WEBHOOK_PORT || 3002);
 const HOST = process.env.WEBHOOK_HOST || "0.0.0.0";
 const MONGODB_URI = process.env.DATABASE_URL || process.env.MONGODB_URI;
@@ -439,6 +445,10 @@ async function initMongo() {
   await mongoClient.connect();
   mongoDb = MONGODB_DB_NAME ? mongoClient.db(MONGODB_DB_NAME) : mongoClient.db();
   webhookEventsDb = MONGODB_WEBHOOK_DB_NAME ? mongoClient.db(MONGODB_WEBHOOK_DB_NAME) : mongoDb;
+  console.log(`[mongo] connected — main: ${MONGODB_DB_NAME || "(default)"}, webhook: ${MONGODB_WEBHOOK_DB_NAME}`);
+
+  // Bootstrap dedup collection indexes
+  await ensureDedupIndexes(webhookEventsDb);
 
   const webhookEvents = webhookEventsDb.collection("whatsapp_webhook_events");
   await safeCreateIndex(webhookEvents, { receivedAt: -1 });
@@ -546,8 +556,11 @@ async function applyInboundReplyToReports(event) {
   if (event.eventType !== "inbound") return { applied: false, reason: "not_inbound" };
 
   const mobile = event.normalizedMobile;
+  if (!mobile) return { applied: false, reason: "missing_mobile" };
   const replyText = event.text;
-  if (!mobile || !replyText) return { applied: false, reason: "missing_mobile_or_text" };
+  // For non-text inbound messages (image, document, audio, etc.) text is null.
+  // Still apply so the report is marked replied; use contentType as a label.
+  const replyLabel = replyText || (event.contentType ? `[${event.contentType}]` : "[message]");
 
   const senderReports = mongoDb.collection("whatsapp_sender_reports");
   const numbers = mongoDb.collection("whatsapp_numbers");
@@ -560,28 +573,29 @@ async function applyInboundReplyToReports(event) {
   // the same mobile number received several different messages in one upload.
   let latestReport = null;
 
-  // Step 1: match exclusively by replyMsgId → responseId/messageId.
-  // When multiple orders were sent to the same phone in one batch, they can
-  // share the same wamid (pre-fix data) or have unique wamids (post-fix).
-  // Either way, prefer the oldest row that hasn't received a reply yet so
-  // each order gets its own reply rather than everything piling onto row 1.
+  // Step 1: match by replyMsgId → responseId/messageId.
+  // Sort newest-first so today's campaign is preferred when the same wamid
+  // appears across multiple uploads.
   if (event.requestId) {
     const msgIdQuery = { $or: [{ responseId: event.requestId }, { messageId: event.requestId }] };
     if (event.uploadId) msgIdQuery.uploadId = Number(event.uploadId);
 
     const candidates = await senderReports
       .find(msgIdQuery)
-      .sort({ sentAt: 1 })   // oldest first
+      .sort({ sentAt: -1 }) // newest first — today's campaign gets the reply
       .toArray();
 
     latestReport =
       candidates.find((c) => !c.customReply && !c.lastReplyAt) ||
       candidates[0] ||
       null;
+    console.log(`[inbound] requestId match — candidates: ${candidates.length}, matched: ${Boolean(latestReport)}`, { requestId: event.requestId, mobile });
   }
 
-  // Step 2: fall back to most-recent record for this mobile only when there
-  // is no requestId to match on at all.
+  // Step 2: mobile fallback.
+  // Sort newest-first so the most-recent send campaign gets credit for the
+  // reply.  The old sentAt:1 (oldest-first) caused today's replies to be
+  // attributed to uploads from weeks/months ago that shared the same mobile.
   if (!latestReport) {
     const mobileQuery = { mobile };
     if (event.uploadId) mobileQuery.uploadId = Number(event.uploadId);
@@ -589,13 +603,14 @@ async function applyInboundReplyToReports(event) {
 
     const mobileCandidates = await senderReports
       .find(mobileQuery)
-      .sort({ sentAt: 1 })
+      .sort({ sentAt: -1 }) // newest first — today's campaign gets the reply
       .toArray();
 
     latestReport =
       mobileCandidates.find((c) => !c.customReply && !c.lastReplyAt) ||
       mobileCandidates[0] ||
       null;
+    console.log(`[inbound] mobile fallback — candidates: ${mobileCandidates.length}, matched: ${Boolean(latestReport)}`, { mobile, uploadId: event.uploadId });
   }
 
   if (!latestReport) {
@@ -606,24 +621,17 @@ async function applyInboundReplyToReports(event) {
     return { applied: false, reason: "no_sender_report" };
   }
 
+  // Each inbound event is already its own document in whatsapp_webhook_events.
+  // Only update the status fields — do NOT append to replyHistory.
   await senderReports.updateOne(
-    {
-      _id: latestReport._id,
-      "replyHistory.eventKey": { $ne: event.eventKey },
-    },
+    { _id: latestReport._id },
     {
       $set: {
         currentStatus: "replied",
-        customReply: replyText,
+        customReply: replyLabel,
         lastReplyAt: replyAt,
         replyWebhook: event,
         updatedAt: now,
-      },
-      $push: {
-        replyHistory: {
-          $each: [historyItem],
-          $slice: -50,
-        },
       },
     },
   );
@@ -634,33 +642,44 @@ async function applyInboundReplyToReports(event) {
       : { cleaned: mobile };
 
   await numbers.updateOne(
-    {
-      ...numberFilter,
-      "replyHistory.eventKey": { $ne: event.eventKey },
-    },
+    { ...numberFilter },
     {
       $set: {
         currentStatus: "replied",
-        customReply: replyText,
+        customReply: replyLabel,
         lastReplyAt: replyAt,
         responseDetails: event,
         lastUpdated: now,
-      },
-      $push: {
-        replyHistory: {
-          $each: [historyItem],
-          $slice: -50,
-        },
       },
     },
   );
 
   console.log("Inbound reply applied", {
     mobile,
-    replyText,
+    replyText: replyLabel,
     uploadId: latestReport.uploadId,
     numberId: latestReport.numberId,
   });
+
+  // Write matched row IDs back to whatsapp_webhook_events so the Electron app
+  // can display per-row reply history without picking up unrelated old events.
+  if (event.eventKey && latestReport.uploadId && latestReport.numberId) {
+    webhookEventsDb
+      .collection("whatsapp_webhook_events")
+      .updateOne(
+        { eventKey: event.eventKey },
+        {
+          $set: {
+            matchedUploadId: Number(latestReport.uploadId),
+            matchedNumberId: Number(latestReport.numberId),
+            modifiedAt: now,
+          },
+        },
+      )
+      .catch((err) =>
+        console.warn("[inbound] matchedIds write-back failed:", err.message),
+      );
+  }
 
   return {
     applied: true,
@@ -681,15 +700,18 @@ async function applyOutboundStatusToReports(event) {
   const numbers = mongoDb.collection("whatsapp_numbers");
 
   let latestReport = null;
+  let matchedBy = null;
   if (requestId) {
     latestReport = await senderReports.findOne(
       { $or: [{ responseId: requestId }, { messageId: requestId }] },
       { sort: { sentAt: -1, updatedAt: -1, _id: -1 } },
     );
+    if (latestReport) matchedBy = "requestId";
   }
 
   if (!latestReport) {
     latestReport = await findSenderReportByWebhookContent(event);
+    if (latestReport) matchedBy = "content";
   }
 
   if (!latestReport && mobile) {
@@ -697,11 +719,20 @@ async function applyOutboundStatusToReports(event) {
       { mobile },
       { sort: { sentAt: -1, updatedAt: -1, _id: -1 } },
     );
+    if (latestReport) matchedBy = "mobile";
   }
 
-  if (!requestId && !mobile) return { applied: false, reason: "no_match_key" };
+  if (!requestId && !mobile) {
+    console.log("[outbound] no match key available — skipping", { status });
+    return { applied: false, reason: "no_match_key" };
+  }
 
-  if (!latestReport) return { applied: false, reason: "no_sender_report" };
+  if (!latestReport) {
+    console.log("[outbound] no sender report found", { mobile, requestId, status });
+    return { applied: false, reason: "no_sender_report" };
+  }
+
+  console.log(`[outbound] status → ${status} (matched by ${matchedBy})`, { mobile, requestId, uploadId: latestReport.uploadId, numberId: latestReport.numberId });
 
   await senderReports.updateOne(
     { _id: latestReport._id },
@@ -743,7 +774,12 @@ async function storeWebhook(body, context = {}) {
     .map((item) => normalizeWebhookItem(item, context));
 
   if (!items.length) {
+    console.log(`[store] all ${rawItems.length} item(s) ignored (test filter)`);
     return { insertedCount: 0, matchedCount: 0, ignoredCount: rawItems.length };
+  }
+  const ignoredCount = rawItems.length - items.length;
+  if (ignoredCount > 0) {
+    console.log(`[store] ${ignoredCount} item(s) ignored (test filter), ${items.length} to process`);
   }
 
   const webhookEvents = webhookEventsDb.collection("whatsapp_webhook_events");
@@ -816,6 +852,7 @@ async function storeWebhook(body, context = {}) {
   for (const [index, item] of items.entries()) {
     const requestDedupeKey = item.stableKey || item.eventKey;
     if (seenInRequest.has(requestDedupeKey)) {
+      console.log(`[store] skip duplicate_in_request`, { mobile: item.normalizedMobile, type: item.eventType });
       applyResults.push({ applied: false, reason: "duplicate_in_request" });
       continue;
     }
@@ -823,14 +860,17 @@ async function storeWebhook(body, context = {}) {
 
     // Skip if already stored (primary or stable key match).
     if (existingEventKeys.has(item.eventKey)) {
+      console.log(`[store] skip duplicate_event`, { mobile: item.normalizedMobile, type: item.eventType, eventKey: item.eventKey });
       applyResults.push({ applied: false, reason: "duplicate_event" });
       continue;
     }
     if (item.stableKey && existingStableKeys.has(item.stableKey)) {
+      console.log(`[store] skip duplicate_stable_key`, { mobile: item.normalizedMobile, type: item.eventType });
       applyResults.push({ applied: false, reason: "duplicate_stable_key" });
       continue;
     }
     if (!insertedOperationIndexes.has(index)) {
+      console.log(`[store] skip duplicate_upsert_match`, { mobile: item.normalizedMobile, type: item.eventType });
       applyResults.push({ applied: false, reason: "duplicate_upsert_match" });
       continue;
     }
@@ -862,7 +902,7 @@ async function storeWebhook(body, context = {}) {
 
 // Notify the local Electron app (if running) that new webhook data arrived.
 // Runs fire-and-forget; failures are logged but never re-thrown.
-const ELECTRON_NOTIFY_URL = process.env.ELECTRON_NOTIFY_URL || "http://127.0.0.1:3002/notify";
+const ELECTRON_NOTIFY_URL = process.env.ELECTRON_NOTIFY_URL || "http://127.0.0.1:3001/notify";
 
 async function notifyElectronApp(payload = {}) {
   try {
@@ -883,7 +923,10 @@ async function notifyElectronApp(payload = {}) {
 }
 
 function ackMsg91Webhook(res, extra = {}) {
-  if (res.headersSent) return;
+  if (res.headersSent) {
+    console.warn("[webhook] ackMsg91Webhook called but headers already sent");
+    return;
+  }
   res.status(200).json({ received: true, ...extra });
 }
 
@@ -910,61 +953,62 @@ async function main() {
   await initMongo();
 
   const app = express();
+
+  // ── global middleware ─────────────────────────────────────────────────────
+  app.use(requestLogger);
   app.use(express.json({ limit: "10mb" }));
   app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
-  // Body-parser errors (malformed JSON, etc.) throw before reaching route
-  // handlers and would otherwise yield a 400 from Express's default handler.
-  // MSG91 auto-pauses webhooks on non-2XX, so ack with 200 here too.
-  app.use((err, req, res, next) => {
-    if (res.headersSent) return next(err);
-    console.error("Body parse error:", err && err.message);
-    res.status(200).json({ received: true, error: (err && err.message) || String(err) });
+  // ── health & metrics (no rate limit) ─────────────────────────────────────
+  app.get("/health", (req, res) => {
+    res.status(200).json({ ok: true, service: SERVICE_NAME, mongoConnected: Boolean(mongoDb), ...rateLimitStatus() });
   });
 
-  app.get("/health", (req, res) => {
-    res.json({ ok: true, service: SERVICE_NAME, mongoConnected: Boolean(mongoDb) });
+  app.get("/metrics", (req, res) => {
+    res.status(200).json(getMetricsSnapshot());
   });
 
   app.get("/webhook", (req, res) => {
-    res.json({
+    res.status(200).json({
       ok: true,
       service: SERVICE_NAME,
       message: "MSG91 must call this endpoint using POST.",
     });
   });
 
-  // Echo endpoint — POST any payload here to see exactly what arrives and how
-  // it is normalised. Safe to use for MSG91 test deliveries.
-  // Example: curl -X POST https://crm.ipkwealth.com/debug-webhook -H "Content-Type: application/json" -d '{"test":1}'
-  app.post("/debug-webhook", (req, res) => {
+  // ── shared webhook middleware ─────────────────────────────────────────────
+  const dedupWebhook = webhookDedupMiddleware(() => webhookEventsDb, { returnDuplicatesAs200: true });
+  const webhookMiddleware = [webhookLimiter, dedupWebhook];
+
+  // Echo endpoint — POST any payload here to see exactly what arrives.
+  app.post("/debug-webhook", apiLimiter, (req, res) => {
     const body = req.body || {};
     const items = getPayloadItems(body);
     const normalised = items.map((item) => normalizeWebhookItem(item, { webhookType: "debug" }));
     console.log("[debug-webhook] raw body:", JSON.stringify(body, null, 2));
     console.log("[debug-webhook] normalised items:", JSON.stringify(normalised.map(({ eventType, normalizedStatus, normalizedMobile, requestId, text }) => ({ eventType, normalizedStatus, normalizedMobile, requestId, text })), null, 2));
-    res.json({ received: true, itemCount: items.length, normalised: normalised.map(({ eventType, normalizedStatus, normalizedMobile, requestId, text }) => ({ eventType, normalizedStatus, normalizedMobile, requestId, text })) });
+    res.status(200).json({ received: true, itemCount: items.length, normalised: normalised.map(({ eventType, normalizedStatus, normalizedMobile, requestId, text }) => ({ eventType, normalizedStatus, normalizedMobile, requestId, text })) });
   });
 
-  app.post("/webhook", async (req, res) => {
+  app.post("/webhook", webhookMiddleware, async (req, res) => {
     console.log(`[webhook] POST /webhook from ${req.ip} — body keys: ${Object.keys(req.body || {}).join(", ")}`);
     ackMsg91Webhook(res);
     processWebhookAfterAck(req.body, { webhookType: "msg91" }, { uploadId: null }, "Webhook");
   });
 
-  app.post("/webhook/msg91/inbound", async (req, res) => {
+  app.post("/webhook/msg91/inbound", webhookMiddleware, async (req, res) => {
     console.log(`[webhook] POST /webhook/msg91/inbound from ${req.ip} — body keys: ${Object.keys(req.body || {}).join(", ")}`);
     ackMsg91Webhook(res);
     processWebhookAfterAck(req.body, { webhookType: "inbound" }, { uploadId: null }, "Inbound webhook");
   });
 
-  app.post("/webhook/msg91/outbound", async (req, res) => {
+  app.post("/webhook/msg91/outbound", webhookMiddleware, async (req, res) => {
     console.log(`[webhook] POST /webhook/msg91/outbound from ${req.ip} — body keys: ${Object.keys(req.body || {}).join(", ")}`);
     ackMsg91Webhook(res);
     processWebhookAfterAck(req.body, { webhookType: "outbound_report" }, { uploadId: null }, "Outbound webhook");
   });
 
-  app.post("/webhook/msg91/:templateName/:uploadId", async (req, res) => {
+  app.post("/webhook/msg91/:templateName/:uploadId", webhookMiddleware, async (req, res) => {
     const ctx = {
       templateName: req.params.templateName,
       uploadId: Number(req.params.uploadId) || null,
@@ -975,19 +1019,27 @@ async function main() {
     processWebhookAfterAck(req.body, ctx, { uploadId: ctx.uploadId }, "Template upload webhook");
   });
 
-  app.post("/webhook/msg91/:templateName", async (req, res) => {
+  app.post("/webhook/msg91/:templateName", webhookMiddleware, async (req, res) => {
     const ctx = { templateName: req.params.templateName, webhookType: "outbound_report" };
     console.log(`[webhook] POST /webhook/msg91/${req.params.templateName} from ${req.ip}`);
     ackMsg91Webhook(res);
     processWebhookAfterAck(req.body, ctx, { uploadId: null }, "Template webhook");
   });
 
-  app.all(/^\/webhook(?:\/.*)?$/, (req, res) => {
+  app.all(/^\/webhook(?:\/.*)?$/, webhookLimiter, dedupWebhook, (req, res) => {
     console.log(`[webhook] ${req.method} ${req.originalUrl} from ${req.ip} matched fallback`);
     ackMsg91Webhook(res, { fallback: true });
     if (req.method === "POST") {
       processWebhookAfterAck(req.body, { webhookType: "msg91" }, { uploadId: null }, "Fallback webhook");
     }
+  });
+
+  // MSG91 auto-pauses webhooks on non-2XX, so always return 200 for any error.
+  // Placed after routes so it catches both body-parser errors and route-level errors.
+  app.use((err, req, res, next) => {
+    if (res.headersSent) return next(err);
+    console.error("Request error:", err && err.message);
+    res.status(200).json({ received: true, error: (err && err.message) || String(err) });
   });
 
   app.listen(PORT, HOST, () => {

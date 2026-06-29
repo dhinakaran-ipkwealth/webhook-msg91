@@ -23,11 +23,54 @@ customerNumber, integratedNumber, direction, eventName, requestId, uuid, replyMs
 4) The Electron app will automatically send per-upload callback_url while sending template messages:
 https://crm.ipkwealth.com/webhook/msg91/<templateName>/<uploadId>
 
-5) Restart services:
+5) Nginx proxy locations for this app:
+The EC2 webhook receiver listens on 127.0.0.1:3002 by default. Add these
+locations to the active crm.ipkwealth.com server block/snippet:
+
+location = /webhook {
+    proxy_pass http://127.0.0.1:3002/webhook;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+
+location ^~ /webhook/ {
+    proxy_pass http://127.0.0.1:3002;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+
+location = /debug-webhook {
+    proxy_pass http://127.0.0.1:3002/debug-webhook;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+
+location = /health {
+    proxy_pass http://127.0.0.1:3002/health;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+
+After editing Nginx:
+sudo nginx -t && sudo systemctl reload nginx
+
+6) Restart services:
 pm2 restart crm-msg91-webhook
 Restart Electron app
 
-6) Test webhook:
+7) Test webhook:
 curl -X POST https://crm.ipkwealth.com/webhook \
   -H "Content-Type: application/json" \
   -d '{"customerNumber":"919363406313","integratedNumber":"919363406313","contentType":"text","text":"Hi test","messages":"[{\"text\":{\"body\":\"Hi test\"},\"type\":\"text\"}]","ts":"2026-05-29T10:00:00+05:30"}'

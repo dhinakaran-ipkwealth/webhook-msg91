@@ -1,0 +1,369 @@
+/* ===========================
+   CUSTOM REPORT DASHBOARD
+=========================== */
+
+#customReportTable {
+  min-width: 2100px;
+}
+
+#customReportTable th {
+  background: linear-gradient(135deg, #0f172a, #1e293b);
+  color: white;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  padding: 14px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+#customReportTable td {
+  padding: 12px 14px;
+  vertical-align: middle;
+  font-size: 13px;
+  color: #334155;
+}
+
+#customReportTable tbody tr {
+  transition: all .2s ease;
+}
+
+#customReportTable tbody tr:hover {
+  background: #f8fbff;
+  transform: scale(1.001);
+}
+
+.table-wrap {
+  border-radius: 20px;
+  width: 100%;
+  max-height: min(62vh, 620px);
+  overflow-x: auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid #e2e8f0;
+  box-shadow:
+    0 15px 40px rgba(15,23,42,.08);
+}
+
+.table-wrap table {
+  table-layout: auto;
+}
+
+/* ===========================
+   FILTER BAR
+=========================== */
+
+.filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 18px;
+  margin-bottom: 18px;
+
+  background: white;
+  border-radius: 20px;
+  border: 1px solid #e2e8f0;
+
+  box-shadow:
+    0 8px 24px rgba(15,23,42,.05);
+}
+
+.filter-row select,
+.filter-row input {
+  min-width: 220px;
+}
+
+/* ===========================
+   KPI SUMMARY CARDS
+=========================== */
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit,minmax(220px,1fr));
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.summary-item {
+  background: white;
+  border-radius: 22px;
+  padding: 22px;
+
+  border: 1px solid #e2e8f0;
+
+  box-shadow:
+    0 10px 30px rgba(15,23,42,.05);
+
+  transition: .25s;
+}
+
+.summary-item:hover {
+  transform: translateY(-4px);
+}
+
+.summary-item div:first-child {
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.summary-item strong {
+  display: block;
+  margin-top: 10px;
+
+  font-size: 34px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+/* ===========================
+   STATUS PILLS
+=========================== */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  padding: 6px 12px;
+  border-radius: 999px;
+
+  font-size: 12px;
+  font-weight: 700;
+
+  white-space: nowrap;
+}
+
+.badge-read {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.badge-sent {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.badge-delivered {
+  background: #ccfbf1;
+  color: #0f766e;
+}
+
+.badge-replied {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.badge-failed {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.badge-pending {
+  background: #e2e8f0;
+  color: #475569;
+}
+
+/* ===========================
+   EVENT TYPE PILLS
+=========================== */
+
+.event-outbound {
+  display: inline-block;
+  background: #eff6ff;
+  color: #2563eb;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.event-inbound {
+  display: inline-block;
+  background: #ecfdf3;
+  color: #16a34a;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* ===========================
+   CUSTOMER REPLY INDICATORS
+=========================== */
+
+.reply-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.reply-line + .reply-line {
+  margin-top: 4px;
+}
+
+.reply-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.reply-icon-positive {
+  background: #dcfce7;
+  color: #16a34a;
+}
+
+.reply-icon-negative {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+/* ===========================
+   MOBILE COLUMN
+=========================== */
+
+.mobile-pill {
+  font-weight: 700;
+  color: #0f172a;
+}
+
+/* ===========================
+   REQUEST ID
+=========================== */
+
+.request-id {
+  font-family: monospace;
+  font-size: 12px;
+  color: #475569;
+  background: #f8fafc;
+  border-radius: 10px;
+  padding: 6px 10px;
+}
+
+/* ===========================
+   TEMPLATE TAG
+=========================== */
+
+.template-tag {
+  display: inline-block;
+
+  background: #eef2ff;
+  color: #4338ca;
+
+  padding: 6px 10px;
+
+  border-radius: 10px;
+
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* ===========================
+   MESSAGE PREVIEW
+=========================== */
+
+.message-preview {
+  max-width: 260px;
+
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+
+  color: #334155;
+}
+
+/* ===========================
+   RESPONSE TEXT
+=========================== */
+
+.response-text {
+  max-width: 180px;
+  font-weight: 600;
+  color: #166534;
+}
+
+/* ===========================
+   PRICE
+=========================== */
+
+.price-tag {
+  font-weight: 700;
+  color: #2563eb;
+}
+
+/* ===========================
+   PAYLOAD BUTTON
+=========================== */
+
+.payload-btn {
+  background: white;
+  color: #334155;
+
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+
+  padding: 8px 14px;
+
+  cursor: pointer;
+
+  font-size: 12px;
+  font-weight: 700;
+
+  transition: .2s;
+}
+
+.payload-btn:hover {
+  background: #eff6ff;
+  border-color: #2563eb;
+  color: #2563eb;
+}
+
+/* ===========================
+   SECTION HEADER
+=========================== */
+
+.section h3 {
+  font-size: 22px;
+  font-weight: 800;
+  color: #0f172a;
+  margin-bottom: 20px;
+}
+
+/* ===========================
+   WEBHOOK INFO BAR
+=========================== */
+
+.reply-capture-bar {
+  background:
+    linear-gradient(
+      135deg,
+      #eff6ff,
+      #ffffff
+    );
+
+  border: 1px solid #bfdbfe;
+
+  border-radius: 16px;
+
+  padding: 16px 18px;
+
+  margin-bottom: 18px;
+}
+
+.reply-capture-bar strong {
+  color: #1e40af;
+}
+
+.reply-capture-bar span {
+  color: #2563eb;
+  font-weight: 700;
+}
