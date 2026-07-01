@@ -1,4 +1,4 @@
-const chooseFileButton = document.getElementById("chooseFileButton");
+﻿const chooseFileButton = document.getElementById("chooseFileButton");
 const csvInput = document.getElementById("csvInput");
 const currentUploadLabel = document.getElementById("currentUploadLabel");
 const webhookInfo = document.getElementById("webhookInfo");
@@ -7,15 +7,21 @@ const previewSummary = document.getElementById("previewSummary");
 const validationPanel = document.getElementById("validationPanel");
 const validationTotalCount = document.getElementById("validationTotalCount");
 const validationValidCount = document.getElementById("validationValidCount");
-const validationInvalidCount = document.getElementById("validationInvalidCount");
+const validationInvalidCount = document.getElementById(
+  "validationInvalidCount",
+);
 const validationLists = document.getElementById("validationLists");
-const invalidNumberTableBody = document.getElementById("invalidNumberTableBody");
+const invalidNumberTableBody = document.getElementById(
+  "invalidNumberTableBody",
+);
 const previewPhoneSearch = document.getElementById("previewPhoneSearch");
 const numberSplitPanel = document.getElementById("numberSplitPanel");
 const indianSplitCount = document.getElementById("indianSplitCount");
 const foreignSplitCount = document.getElementById("foreignSplitCount");
 const exportIndianCsvButton = document.getElementById("exportIndianCsvButton");
-const exportForeignCsvButton = document.getElementById("exportForeignCsvButton");
+const exportForeignCsvButton = document.getElementById(
+  "exportForeignCsvButton",
+);
 const previewTableBody = document.getElementById("previewTableBody");
 const reportTableBody = document.getElementById("reportTableBody");
 const uploadPhoneSearch = document.getElementById("uploadPhoneSearch");
@@ -27,7 +33,9 @@ const templateDescription = document.getElementById("templateDescription");
 const mappingSummary = document.getElementById("mappingSummary");
 const mappingTableBody = document.getElementById("mappingTableBody");
 const deliveryReplySummary = document.getElementById("deliveryReplySummary");
-const deliveryContextSummary = document.getElementById("deliveryContextSummary");
+const deliveryContextSummary = document.getElementById(
+  "deliveryContextSummary",
+);
 const customScope = document.getElementById("customScope");
 const customNumberFilter = document.getElementById("customNumberFilter");
 const customTemplateFilter = document.getElementById("customTemplateFilter");
@@ -42,14 +50,18 @@ const customEndDateInput = document.getElementById("customEndDateInput");
 const customEndTimeInput = document.getElementById("customEndTimeInput");
 const customDateTimeOk = document.getElementById("customDateTimeOk");
 const customDateTimeCancel = document.getElementById("customDateTimeCancel");
-const dateTimePickerBackdrop = document.getElementById("dateTimePickerBackdrop");
+const dateTimePickerBackdrop = document.getElementById(
+  "dateTimePickerBackdrop",
+);
 const dateTimePickerClose = document.getElementById("dateTimePickerClose");
 const customEventType = document.getElementById("customEventType");
 const customStatus = document.getElementById("customStatus");
 const customSearch = document.getElementById("customSearch");
 const customReportRefresh = document.getElementById("customReportRefresh");
 const customReportExport = document.getElementById("customReportExport");
-const customReportEmailAdmin = document.getElementById("customReportEmailAdmin");
+const customReportEmailAdmin = document.getElementById(
+  "customReportEmailAdmin",
+);
 const customReportEmailRMs = document.getElementById("customReportEmailRMs");
 const customReportSchedule = document.getElementById("customReportSchedule");
 const schedulePanel = document.getElementById("schedulePanel");
@@ -66,7 +78,9 @@ const customReportSummaryGrid = document.getElementById(
 const customReportTableBody = document.getElementById("customReportTableBody");
 const sendButton = document.getElementById("sendButton");
 const refreshButton = document.getElementById("refreshButton");
-const deliveryReportRefreshButton = document.getElementById("deliveryReportRefreshButton");
+const deliveryReportRefreshButton = document.getElementById(
+  "deliveryReportRefreshButton",
+);
 
 const saasAlertContainer = document.getElementById("saasAlertContainer");
 if (!saasAlertContainer) {
@@ -85,7 +99,13 @@ let selectedUploadValidation = { total: 0, valid: 0, invalid: 0 };
 let refreshInProgress = false;
 let customReportRefreshInProgress = false;
 let customFiltersTouched = false;
-const mediaComponentTypes = new Set(["image", "video", "document", "audio", "media"]);
+const mediaComponentTypes = new Set([
+  "image",
+  "video",
+  "document",
+  "audio",
+  "media",
+]);
 
 const JSON_ICON_SVG = `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3" stroke="currentColor" stroke-width="1.2" fill="transparent"/><path d="M9 8s1-1 2 0-1 2-1 2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M15 16s-1 1-2 0 1-2 1-2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 
@@ -125,10 +145,19 @@ csvInput.addEventListener("change", async (event) => {
     displayPreview(result.rows);
 
     // Wait for any in-progress auto-refresh to finish, then reload.
-    const waitForIdle = () => new Promise((resolve) => {
-      if (!refreshInProgress) { resolve(); return; }
-      const t = setInterval(() => { if (!refreshInProgress) { clearInterval(t); resolve(); } }, 100);
-    });
+    const waitForIdle = () =>
+      new Promise((resolve) => {
+        if (!refreshInProgress) {
+          resolve();
+          return;
+        }
+        const t = setInterval(() => {
+          if (!refreshInProgress) {
+            clearInterval(t);
+            resolve();
+          }
+        }, 100);
+      });
     await waitForIdle();
     await refreshUploads();
   } catch (err) {
@@ -139,23 +168,33 @@ csvInput.addEventListener("change", async (event) => {
 });
 
 if (exportIndianCsvButton) {
-  exportIndianCsvButton.addEventListener("click", () => exportSplitCsv("india"));
+  exportIndianCsvButton.addEventListener("click", () =>
+    exportSplitCsv("india"),
+  );
 }
 
 if (exportForeignCsvButton) {
-  exportForeignCsvButton.addEventListener("click", () => exportSplitCsv("foreign"));
+  exportForeignCsvButton.addEventListener("click", () =>
+    exportSplitCsv("foreign"),
+  );
 }
 
 if (previewPhoneSearch) {
-  previewPhoneSearch.addEventListener("input", () => displayPreview(lastPreviewRows));
+  previewPhoneSearch.addEventListener("input", () =>
+    displayPreview(lastPreviewRows),
+  );
 }
 
 if (uploadPhoneSearch) {
-  uploadPhoneSearch.addEventListener("input", () => renderUploadTable(lastUploads));
+  uploadPhoneSearch.addEventListener("input", () =>
+    renderUploadTable(lastUploads),
+  );
 }
 
 if (deliveryPhoneSearch) {
-  deliveryPhoneSearch.addEventListener("input", () => renderDeliveryRows(lastReportRows));
+  deliveryPhoneSearch.addEventListener("input", () =>
+    renderDeliveryRows(lastReportRows),
+  );
 }
 
 sendButton.addEventListener("click", async () => {
@@ -165,7 +204,10 @@ sendButton.addEventListener("click", async () => {
   }
 
   if (!selectedUploadValidation.valid) {
-    showAlert("No valid numbers found. Upload a file with valid WhatsApp numbers before sending.", "warning");
+    showAlert(
+      "No valid numbers found. Upload a file with valid WhatsApp numbers before sending.",
+      "warning",
+    );
     return;
   }
 
@@ -214,7 +256,8 @@ refreshButton.addEventListener("click", async () => {
     refreshInProgress = true;
     let serverResult = null;
     if (selectedUploadId) {
-      serverResult = await window.electronAPI.refreshUploadReport(selectedUploadId);
+      serverResult =
+        await window.electronAPI.refreshUploadReport(selectedUploadId);
     }
     await refreshUploads();
     showAlert(
@@ -232,11 +275,18 @@ refreshButton.addEventListener("click", async () => {
 let deliveryReportRefreshInProgress = false;
 deliveryReportRefreshButton.addEventListener("click", async () => {
   if (deliveryReportRefreshInProgress) {
-    showAlert("Delivery report refresh already in progress, please wait.", "info", 2000);
+    showAlert(
+      "Delivery report refresh already in progress, please wait.",
+      "info",
+      2000,
+    );
     return;
   }
   if (!selectedUploadId) {
-    showAlert("Select an upload first to refresh its delivery report.", "warning");
+    showAlert(
+      "Select an upload first to refresh its delivery report.",
+      "warning",
+    );
     return;
   }
   const icon = document.getElementById("deliveryReportRefreshIcon");
@@ -246,11 +296,17 @@ deliveryReportRefreshButton.addEventListener("click", async () => {
     deliveryReportRefreshButton.disabled = true;
     if (label) label.textContent = "Refreshing...";
     if (icon) icon.style.animation = "spin 0.8s linear infinite";
-    const serverResult = await window.electronAPI.refreshUploadReport(selectedUploadId);
+    const serverResult =
+      await window.electronAPI.refreshUploadReport(selectedUploadId);
     await refreshReport(selectedUploadId);
     const updatedCount = Number(serverResult?.updated || 0);
-    const alertType = updatedCount > 0 || serverResult?.source ? "success" : "info";
-    showAlert(serverResult?.message || "Delivery report refreshed from MongoDB.", alertType, 3000);
+    const alertType =
+      updatedCount > 0 || serverResult?.source ? "success" : "info";
+    showAlert(
+      serverResult?.message || "Delivery report refreshed from MongoDB.",
+      alertType,
+      3000,
+    );
   } catch (err) {
     showAlert(`Delivery report refresh failed: ${err.message}`, "error");
   } finally {
@@ -319,39 +375,57 @@ customReportRefresh.addEventListener("click", async () => {
 });
 customReportExport.addEventListener("click", exportCustomReportExcel);
 
-if (customReportEmailAdmin) customReportEmailAdmin.addEventListener("click", async () => {
-  const dateDisplay = customDateTimeDisplay?.value || "current filter range";
-  if (!confirm(`Send Admin Report email?\n\nThis will email the report for: ${dateDisplay}\n\nRecipients: software@ipkwealth.com / prabhukumarasamy@ipkwealth.com\n\nClick OK to send.`)) return;
-  try {
-    customReportEmailAdmin.disabled = true;
-    customReportEmailAdmin.textContent = "Emailing...";
-    const filters = getCustomReportFilters();
-    await window.electronAPI.sendAdminReportEmail(filters);
-    showAlert("Admin Excel report successfully generated and sent to software@ipkwealth.com/prabhukumarasamy@ipkwealth.com!", "success");
-  } catch (err) {
-    showAlert(`Admin email report failed: ${err.message}`, "error");
-  } finally {
-    customReportEmailAdmin.disabled = false;
-    customReportEmailAdmin.textContent = "Email Admin Report";
-  }
-});
+if (customReportEmailAdmin)
+  customReportEmailAdmin.addEventListener("click", async () => {
+    const dateDisplay = customDateTimeDisplay?.value || "current filter range";
+    if (
+      !confirm(
+        `Send Admin Report email?\n\nThis will email the report for: ${dateDisplay}\n\nRecipients: software@ipkwealth.com / prabhukumarasamy@ipkwealth.com\n\nClick OK to send.`,
+      )
+    )
+      return;
+    try {
+      customReportEmailAdmin.disabled = true;
+      customReportEmailAdmin.textContent = "Emailing...";
+      const filters = getCustomReportFilters();
+      await window.electronAPI.sendAdminReportEmail(filters);
+      showAlert(
+        "Admin Excel report successfully generated and sent to software@ipkwealth.com/prabhukumarasamy@ipkwealth.com!",
+        "success",
+      );
+    } catch (err) {
+      showAlert(`Admin email report failed: ${err.message}`, "error");
+    } finally {
+      customReportEmailAdmin.disabled = false;
+      customReportEmailAdmin.textContent = "Email Admin Report";
+    }
+  });
 
-if (customReportEmailRMs) customReportEmailRMs.addEventListener("click", async () => {
-  const dateDisplay = customDateTimeDisplay?.value || "current filter range";
-  if (!confirm(`Send RM Reports email?\n\nThis will email individual reports to each RM for: ${dateDisplay}\n\nClick OK to send to all configured RM email addresses.`)) return;
-  try {
-    customReportEmailRMs.disabled = true;
-    customReportEmailRMs.textContent = "Emailing...";
-    const filters = getCustomReportFilters();
-    const stats = await window.electronAPI.sendRmReports(filters);
-    showAlert(`Grouped RM Excel reports generated successfully. Sent to ${stats.sent} RM email address(es)!`, "success");
-  } catch (err) {
-    showAlert(`RM grouped email reports failed: ${err.message}`, "error");
-  } finally {
-    customReportEmailRMs.disabled = false;
-    customReportEmailRMs.textContent = "Email RM Reports";
-  }
-});
+if (customReportEmailRMs)
+  customReportEmailRMs.addEventListener("click", async () => {
+    const dateDisplay = customDateTimeDisplay?.value || "current filter range";
+    if (
+      !confirm(
+        `Send RM Reports email?\n\nThis will email individual reports to each RM for: ${dateDisplay}\n\nClick OK to send to all configured RM email addresses.`,
+      )
+    )
+      return;
+    try {
+      customReportEmailRMs.disabled = true;
+      customReportEmailRMs.textContent = "Emailing...";
+      const filters = getCustomReportFilters();
+      const stats = await window.electronAPI.sendRmReports(filters);
+      showAlert(
+        `Grouped RM Excel reports generated successfully. Sent to ${stats.sent} RM email address(es)!`,
+        "success",
+      );
+    } catch (err) {
+      showAlert(`RM grouped email reports failed: ${err.message}`, "error");
+    } finally {
+      customReportEmailRMs.disabled = false;
+      customReportEmailRMs.textContent = "Email RM Reports";
+    }
+  });
 // Schedule panel handlers
 if (customReportSchedule && schedulePanel) {
   customReportSchedule.addEventListener("click", () => {
@@ -359,7 +433,10 @@ if (customReportSchedule && schedulePanel) {
   });
 }
 
-if (scheduleClose) scheduleClose.addEventListener("click", () => schedulePanel.setAttribute("aria-hidden", "true"));
+if (scheduleClose)
+  scheduleClose.addEventListener("click", () =>
+    schedulePanel.setAttribute("aria-hidden", "true"),
+  );
 
 if (scheduleSave) {
   scheduleSave.addEventListener("click", async () => {
@@ -378,20 +455,26 @@ if (scheduleSave) {
   });
 }
 
-if (scheduleRunNow) scheduleRunNow.addEventListener("click", async () => {
-  if (!confirm("Run the scheduled report now?\n\nThis will send Admin Report and RM Reports emails immediately (24-hour window ending now).\n\nClick OK to send.")) return;
-  try {
-    scheduleRunNow.disabled = true;
-    scheduleRunNow.textContent = "Running...";
-    await window.electronAPI.scheduleRunNow();
-    showAlert("Scheduled report sent successfully.", "success");
-  } catch (err) {
-    showAlert(`Scheduled report failed: ${err.message}`, "error");
-  } finally {
-    scheduleRunNow.disabled = false;
-    scheduleRunNow.textContent = "Run Now";
-  }
-});
+if (scheduleRunNow)
+  scheduleRunNow.addEventListener("click", async () => {
+    if (
+      !confirm(
+        "Run the scheduled report now?\n\nThis will send Admin Report and RM Reports emails immediately (24-hour window ending now).\n\nClick OK to send.",
+      )
+    )
+      return;
+    try {
+      scheduleRunNow.disabled = true;
+      scheduleRunNow.textContent = "Running...";
+      await window.electronAPI.scheduleRunNow();
+      showAlert("Scheduled report sent successfully.", "success");
+    } catch (err) {
+      showAlert(`Scheduled report failed: ${err.message}`, "error");
+    } finally {
+      scheduleRunNow.disabled = false;
+      scheduleRunNow.textContent = "Run Now";
+    }
+  });
 
 // initialize schedule config on load (from main process)
 window.electronAPI.scheduleGet().then((cfg) => {
@@ -556,13 +639,13 @@ function escapeHtml(value) {
 function getAlertIcon(type) {
   switch (type) {
     case "success":
-      return "✅";
+      return "âœ…";
     case "warning":
-      return "⚠️";
+      return "âš ï¸";
     case "error":
-      return "❌";
+      return "âŒ";
     default:
-      return "ℹ️";
+      return "â„¹ï¸";
   }
 }
 
@@ -618,7 +701,12 @@ function parseStoredRowData(row) {
 }
 
 function isPreviewRowValid(row) {
-  return row?.valid === true || row?.valid === 1 || row?.valid === "1" || row?.valid === "true";
+  return (
+    row?.valid === true ||
+    row?.valid === 1 ||
+    row?.valid === "1" ||
+    row?.valid === "true"
+  );
 }
 
 function digitsOnly(value) {
@@ -626,13 +714,17 @@ function digitsOnly(value) {
 }
 
 function rowPhoneText(row) {
-  return digitsOnly([
-    row?.cleaned,
-    row?.original,
-    row?.normalizedMobile,
-    row?.customerNumber,
-    row?.mobile,
-  ].filter(Boolean).join(" "));
+  return digitsOnly(
+    [
+      row?.cleaned,
+      row?.original,
+      row?.normalizedMobile,
+      row?.customerNumber,
+      row?.mobile,
+    ]
+      .filter(Boolean)
+      .join(" "),
+  );
 }
 
 function rowMatchesPhoneSearch(row, searchValue) {
@@ -668,7 +760,9 @@ function updateSelectedUploadValidationFromUpload(upload) {
 
 function updateSendButtonState() {
   if (!sendButton) return;
-  const hasValidatedUpload = Boolean(selectedUploadId && selectedUploadValidation.total > 0);
+  const hasValidatedUpload = Boolean(
+    selectedUploadId && selectedUploadValidation.total > 0,
+  );
   const hasValidNumbers = selectedUploadValidation.valid > 0;
   sendButton.disabled = !hasValidatedUpload || !hasValidNumbers;
   sendButton.title = hasValidatedUpload
@@ -683,8 +777,10 @@ function getInvalidReason(row) {
   if (!String(row?.original || "").trim()) return "No mobile/phone value found";
   const cleaned = String(row?.cleaned || "").trim();
   if (!cleaned) return "No digits found";
-  if (/^91\d{10}$/.test(cleaned)) return "Indian number is not a valid mobile format";
-  if (/^65\d{8}$/.test(cleaned)) return "Singapore number is not a valid mobile format";
+  if (/^91\d{10}$/.test(cleaned))
+    return "Indian number is not a valid mobile format";
+  if (/^65\d{8}$/.test(cleaned))
+    return "Singapore number is not a valid mobile format";
   return "Expected country code with 8 to 15 digits";
 }
 
@@ -701,13 +797,18 @@ function getSplitRows(region) {
 function updateNumberSplitPanel(rows = lastPreviewRows) {
   if (!numberSplitPanel) return;
   const previewRows = Array.isArray(rows) ? rows : [];
-  const indianCount = previewRows.filter((row) => getRecipientRegion(row) === "india").length;
-  const foreignCount = previewRows.filter((row) => getRecipientRegion(row) === "foreign").length;
+  const indianCount = previewRows.filter(
+    (row) => getRecipientRegion(row) === "india",
+  ).length;
+  const foreignCount = previewRows.filter(
+    (row) => getRecipientRegion(row) === "foreign",
+  ).length;
 
   if (indianSplitCount) indianSplitCount.textContent = String(indianCount);
   if (foreignSplitCount) foreignSplitCount.textContent = String(foreignCount);
   if (exportIndianCsvButton) exportIndianCsvButton.disabled = indianCount === 0;
-  if (exportForeignCsvButton) exportForeignCsvButton.disabled = foreignCount === 0;
+  if (exportForeignCsvButton)
+    exportForeignCsvButton.disabled = foreignCount === 0;
 
   numberSplitPanel.classList.toggle("hidden", previewRows.length === 0);
 }
@@ -725,7 +826,10 @@ function renderValidationLists(rows = lastPreviewRows) {
   const searchValue = previewPhoneSearch?.value || "";
   const invalidRows = previewRows
     .map((row, index) => ({ row, index }))
-    .filter(({ row }) => !isPreviewRowValid(row) && rowMatchesPhoneSearch(row, searchValue));
+    .filter(
+      ({ row }) =>
+        !isPreviewRowValid(row) && rowMatchesPhoneSearch(row, searchValue),
+    );
 
   validationLists.classList.toggle("hidden", previewRows.length === 0);
   invalidNumberTableBody.innerHTML = "";
@@ -749,10 +853,14 @@ function renderValidationLists(rows = lastPreviewRows) {
 function updateValidationPreview(rows = lastPreviewRows) {
   const stats = getValidationStats(rows);
   selectedUploadValidation = stats;
-  if (validationPanel) validationPanel.classList.toggle("hidden", stats.total === 0);
-  if (validationTotalCount) validationTotalCount.textContent = String(stats.total);
-  if (validationValidCount) validationValidCount.textContent = String(stats.valid);
-  if (validationInvalidCount) validationInvalidCount.textContent = String(stats.invalid);
+  if (validationPanel)
+    validationPanel.classList.toggle("hidden", stats.total === 0);
+  if (validationTotalCount)
+    validationTotalCount.textContent = String(stats.total);
+  if (validationValidCount)
+    validationValidCount.textContent = String(stats.valid);
+  if (validationInvalidCount)
+    validationInvalidCount.textContent = String(stats.invalid);
   renderValidationLists(rows);
   updateSendButtonState();
 }
@@ -778,8 +886,11 @@ function buildCsvFromRows(rows) {
   const lines = [headers.map(escapeCsvValue).join(",")];
   rows.forEach((row) => {
     const data = parseStoredRowData(row);
-    if (!Object.keys(data).length) data["Mobile Number"] = row.cleaned || row.original || "";
-    lines.push(headers.map((header) => escapeCsvValue(data[header] ?? "")).join(","));
+    if (!Object.keys(data).length)
+      data["Mobile Number"] = row.cleaned || row.original || "";
+    lines.push(
+      headers.map((header) => escapeCsvValue(data[header] ?? "")).join(","),
+    );
   });
   return lines.join("\r\n");
 }
@@ -799,15 +910,23 @@ function downloadCsv(filename, csvText) {
 function exportSplitCsv(region) {
   const rows = getSplitRows(region);
   if (!rows.length) {
-    showAlert(`No ${region === "india" ? "Indian" : "foreign"} numbers found in this preview.`, "warning");
+    showAlert(
+      `No ${region === "india" ? "Indian" : "foreign"} numbers found in this preview.`,
+      "warning",
+    );
     return;
   }
 
   const csvText = buildCsvFromRows(rows);
   const label = region === "india" ? "indian" : "foreign";
-  const uploadPart = selectedUploadId ? `upload-${selectedUploadId}` : "preview";
+  const uploadPart = selectedUploadId
+    ? `upload-${selectedUploadId}`
+    : "preview";
   downloadCsv(`${label}-numbers-${uploadPart}.csv`, csvText);
-  showAlert(`${rows.length} ${label} row(s) exported as CSV. Upload that file as a separate batch before sending.`, "success");
+  showAlert(
+    `${rows.length} ${label} row(s) exported as CSV. Upload that file as a separate batch before sending.`,
+    "success",
+  );
 }
 
 function updateCsvHeadersFromRows(rows) {
@@ -854,7 +973,10 @@ function syncCampaignSelectorsFromUpload(upload) {
         String(entry.number) === String(upload.senderNumber) ||
         String(entry.id) === String(upload.senderNumber),
     );
-    if (sender && setSelectValueIfOptionExists(numberSelect, sender.id || sender.number)) {
+    if (
+      sender &&
+      setSelectValueIfOptionExists(numberSelect, sender.id || sender.number)
+    ) {
       renderTemplateOptions();
     }
   }
@@ -874,7 +996,10 @@ function syncCustomReportFiltersToCampaign(force = false) {
   customStatus.value = "all";
   const selectedNumber = getSelectedNumber();
   if (selectedNumber) {
-    setSelectValueIfOptionExists(customNumberFilter, selectedNumber.id || selectedNumber.number);
+    setSelectValueIfOptionExists(
+      customNumberFilter,
+      selectedNumber.id || selectedNumber.number,
+    );
   }
   renderCustomTemplateOptions();
 
@@ -956,7 +1081,9 @@ function renderCustomNumberOptions() {
 
 function renderCustomTemplateOptions() {
   const selectedNumber = msg91Config.integratedNumbers.find(
-    (entry) => entry.id === customNumberFilter.value || entry.number === customNumberFilter.value,
+    (entry) =>
+      entry.id === customNumberFilter.value ||
+      entry.number === customNumberFilter.value,
   );
   customTemplateFilter.innerHTML = `<option value="all">All templates</option>`;
   const templates = selectedNumber?.templates?.length
@@ -1016,7 +1143,9 @@ function renderMappingTable() {
 
   const previewData = parseStoredRowData(lastPreviewRows[0]);
   components.forEach((component) => {
-    const isMedia = mediaComponentTypes.has(String(component.type || "").toLowerCase());
+    const isMedia = mediaComponentTypes.has(
+      String(component.type || "").toLowerCase(),
+    );
     const defaultColumn = findDefaultColumn(component);
     const tr = document.createElement("tr");
     const options = [`<option value="">Select column</option>`]
@@ -1102,21 +1231,31 @@ async function loadMsg91Config() {
 function renderUploadTable(uploads) {
   // Render uploads table without duplicate rows
   uploadTableBody.innerHTML = "";
-  const searchValue = String(uploadPhoneSearch?.value || "").trim().toLowerCase();
+  const searchValue = String(uploadPhoneSearch?.value || "")
+    .trim()
+    .toLowerCase();
   const searchDigits = digitsOnly(searchValue);
-  const filteredUploads = (Array.isArray(uploads) ? uploads : []).filter((upload) => {
-    if (!searchValue) return true;
-    const text = [
-      upload.fileName,
-      upload.templateLabel,
-      upload.templateName,
-      upload.senderId,
-      upload.senderNumber,
-      upload.senderLabel,
-    ].filter(Boolean).join(" ").toLowerCase();
-    const digits = digitsOnly(text);
-    return text.includes(searchValue) || (searchDigits && digits.includes(searchDigits));
-  });
+  const filteredUploads = (Array.isArray(uploads) ? uploads : []).filter(
+    (upload) => {
+      if (!searchValue) return true;
+      const text = [
+        upload.fileName,
+        upload.templateLabel,
+        upload.templateName,
+        upload.senderId,
+        upload.senderNumber,
+        upload.senderLabel,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      const digits = digitsOnly(text);
+      return (
+        text.includes(searchValue) ||
+        (searchDigits && digits.includes(searchDigits))
+      );
+    },
+  );
 
   if (!filteredUploads.length) {
     uploadTableBody.innerHTML = `<tr><td colspan="10" class="small-note">No uploads match this search.</td></tr>`;
@@ -1125,9 +1264,13 @@ function renderUploadTable(uploads) {
 
   filteredUploads.forEach((upload) => {
     const tr = document.createElement("tr");
-    const template = escapeHtml(upload.templateLabel || upload.templateName || "-");
+    const template = escapeHtml(
+      upload.templateLabel || upload.templateName || "-",
+    );
     const sender = escapeHtml(upload.senderId || upload.senderNumber || "-");
-    const triggeredAt = escapeHtml(upload.sentAt || upload.updatedAt || upload.createdAt || "-");
+    const triggeredAt = escapeHtml(
+      upload.sentAt || upload.updatedAt || upload.createdAt || "-",
+    );
     const retryButton =
       Number(upload.failedCount || 0) > 0
         ? `<button class="small-button" data-retry-id="${upload.id}" title="Retry only failed rows from this upload">Retry Failed</button>`
@@ -1200,7 +1343,9 @@ function renderUploadTable(uploads) {
 
 async function refreshUploadsSummary() {
   try {
-    const stats = await window.electronAPI.fetchSenderStats({ todayOnly: true });
+    const stats = await window.electronAPI.fetchSenderStats({
+      todayOnly: true,
+    });
     const el = document.getElementById("uploadsSummary");
     if (!el) return;
     el.textContent = `Today: ${stats.totalSends} messages sent across ${stats.templatesTriggered} template(s). Responses received: ${stats.responsesReceived}.`;
@@ -1254,28 +1399,50 @@ function displayPreview(rows) {
       tr.dataset.tableType = "preview";
       tr.dataset.rowIndex = String(index);
       const previewPayload = parseStoredRowData(row);
-      const previewHasJson = previewPayload && Object.keys(previewPayload).length > 0;
-      
-      const previewStatusText = row.currentStatus || (isPreviewRowValid(row) ? "valid" : "invalid");
+      const previewHasJson =
+        previewPayload && Object.keys(previewPayload).length > 0;
+
+      const previewStatusText =
+        row.currentStatus || (isPreviewRowValid(row) ? "valid" : "invalid");
       let previewStatusClass = "badge-pending";
-      if (previewStatusText === "valid" || previewStatusText === "Valid") previewStatusClass = "badge-delivered";
-      else if (previewStatusText === "invalid" || previewStatusText === "Invalid") previewStatusClass = "badge-failed";
+      if (previewStatusText === "valid" || previewStatusText === "Valid")
+        previewStatusClass = "badge-delivered";
+      else if (
+        previewStatusText === "invalid" ||
+        previewStatusText === "Invalid"
+      )
+        previewStatusClass = "badge-failed";
       const previewStatusHtml = `<span class="badge ${previewStatusClass}">${escapeHtml(previewStatusText)}</span>`;
 
       const previewMobileHtml = `<span class="mobile-pill">${escapeHtml(row.cleaned || row.original || "")}</span>`;
       const region = getRecipientRegion(row);
       const regionLabel =
-        region === "india" ? "Indian Batch" : region === "foreign" ? "Foreign Batch" : "Invalid";
+        region === "india"
+          ? "Indian Batch"
+          : region === "foreign"
+            ? "Foreign Batch"
+            : "Invalid";
       const regionClass =
-        region === "india" ? "region-india" : region === "foreign" ? "region-foreign" : "region-invalid";
+        region === "india"
+          ? "region-india"
+          : region === "foreign"
+            ? "region-foreign"
+            : "region-invalid";
       const regionHtml = `<span class="region-pill ${regionClass}">${escapeHtml(regionLabel)}</span>`;
 
       const previewDeliveryText = row.deliveryStatus || "pending";
       let previewDeliveryClass = "badge-pending";
       const pdLower = String(previewDeliveryText).toLowerCase();
-      if (pdLower.includes("delivered") || pdLower.includes("read") || pdLower.includes("success")) {
+      if (
+        pdLower.includes("delivered") ||
+        pdLower.includes("read") ||
+        pdLower.includes("success")
+      ) {
         previewDeliveryClass = "badge-delivered";
-      } else if (pdLower.includes("failed") || pdLower.includes("undelivered")) {
+      } else if (
+        pdLower.includes("failed") ||
+        pdLower.includes("undelivered")
+      ) {
         previewDeliveryClass = "badge-failed";
       } else if (pdLower.includes("sent") || pdLower.includes("submitted")) {
         previewDeliveryClass = "badge-sent";
@@ -1307,7 +1474,7 @@ function displayPreview(rows) {
 // Concurrent calls (auto-poll + manual button) would clear + re-append the
 // table in an interleaved order, producing duplicate rows.
 let reportRefreshInProgress = false;
-let reportRefreshQueued = null;   // holds the latest uploadId requested while busy
+let reportRefreshQueued = null; // holds the latest uploadId requested while busy
 
 async function refreshReport(uploadId) {
   if (reportRefreshInProgress) {
@@ -1371,7 +1538,11 @@ function renderDeliveryRows(rows = lastReportRows) {
     const deliveryText = row.deliveryStatus || row.currentStatus || "pending";
     let deliveryClass = "badge-pending";
     const dtLower = String(deliveryText).toLowerCase();
-    if (dtLower.includes("delivered") || dtLower.includes("read") || dtLower.includes("success")) {
+    if (
+      dtLower.includes("delivered") ||
+      dtLower.includes("read") ||
+      dtLower.includes("success")
+    ) {
       deliveryClass = "badge-delivered";
     } else if (dtLower.includes("failed") || dtLower.includes("undelivered")) {
       deliveryClass = "badge-failed";
@@ -1397,7 +1568,10 @@ function renderDeliveryRows(rows = lastReportRows) {
     const replyText = formatReplyHistory(row);
     return replyText && replyText !== "-";
   }).length;
-  const filterText = visibleRows.length === rows.length ? "" : ` (${visibleRows.length} after phone search)`;
+  const filterText =
+    visibleRows.length === rows.length
+      ? ""
+      : ` (${visibleRows.length} after phone search)`;
   deliveryReplySummary.textContent = rows.length
     ? `Showing ${rows.length} selected-upload transaction${rows.length === 1 ? "" : "s"}${filterText}. ${matchedReplyCount} customer repl${matchedReplyCount === 1 ? "y" : "ies"} matched.`
     : "No selected-upload transactions found yet.";
@@ -1405,7 +1579,9 @@ function renderDeliveryRows(rows = lastReportRows) {
 
 function updateDeliveryContextSummary(uploadId) {
   if (!deliveryContextSummary) return;
-  const upload = lastUploads.find((item) => Number(item.id) === Number(uploadId));
+  const upload = lastUploads.find(
+    (item) => Number(item.id) === Number(uploadId),
+  );
   if (!upload) {
     deliveryContextSummary.textContent = uploadId
       ? `Selected upload #${uploadId}.`
@@ -1430,7 +1606,7 @@ function getReportRangeForPreset(preset) {
   const end = new Date(now);
 
   if (preset === "yesterday") {
-    // Yesterday 10:00 AM IST → Today 10:00 AM IST
+    // Yesterday 10:00 AM IST â†’ Today 10:00 AM IST
     start.setDate(start.getDate() - 1);
     start.setHours(10, 0, 0, 0);
     end.setHours(10, 0, 0, 0);
@@ -1468,7 +1644,7 @@ function formatDateTimeDisplayLabel(startIso, endIso) {
     return "Select date range";
   }
   const fmt = (d) => d.toLocaleString("en-IN", { timeZone: "Asia/Calcutta" });
-  return `${fmt(startDate)} — ${fmt(endDate)}`;
+  return `${fmt(startDate)} â€” ${fmt(endDate)}`;
 }
 
 function updateDateRangeDisplay() {
@@ -1496,11 +1672,13 @@ function openDateTimePicker() {
   if (customRangePreset) customRangePreset.value = "custom";
   const now = new Date();
   const startValue =
-    customStartDateTime.value && !Number.isNaN(new Date(customStartDateTime.value).getTime())
+    customStartDateTime.value &&
+    !Number.isNaN(new Date(customStartDateTime.value).getTime())
       ? new Date(customStartDateTime.value)
       : new Date(now.setHours(0, 0, 0, 0));
   const endValue =
-    customEndDateTime.value && !Number.isNaN(new Date(customEndDateTime.value).getTime())
+    customEndDateTime.value &&
+    !Number.isNaN(new Date(customEndDateTime.value).getTime())
       ? new Date(customEndDateTime.value)
       : new Date(startValue);
 
@@ -1527,9 +1705,13 @@ function getCustomReportFilters() {
   return {
     uploadId: customScope.value === "selected" ? selectedUploadId : null,
     filteredNumberId:
-      numberId && numberId !== "all" ? selectedSender?.number || numberId : null,
+      numberId && numberId !== "all"
+        ? selectedSender?.number || numberId
+        : null,
     templateName:
-      templateName && templateName !== "all" ? customTemplateFilter.value : null,
+      templateName && templateName !== "all"
+        ? customTemplateFilter.value
+        : null,
     startDateTime: customStartDateTime.value || null,
     endDateTime: customEndDateTime.value || null,
     eventType: customEventType.value,
@@ -1565,7 +1747,7 @@ function isJsonLike(value) {
 function truncateText(text, max = 120) {
   if (!text) return "";
   const s = String(text);
-  return s.length > max ? s.slice(0, max - 1) + "…" : s;
+  return s.length > max ? s.slice(0, max - 1) + "â€¦" : s;
 }
 
 function formatReplyHistoryEntries(row) {
@@ -1582,12 +1764,20 @@ function formatReplyHistoryEntries(row) {
 
   const entries = history
     .map((reply) => ({
-      time: displayDate(reply.receivedAt || reply.lastReplyAt || reply.updatedAt),
-      text: reply.text || reply.customReply || JSON.stringify(reply.payload || reply.rawPayload || {}),
+      time: displayDate(
+        reply.receivedAt || reply.lastReplyAt || reply.updatedAt,
+      ),
+      text:
+        reply.text ||
+        reply.customReply ||
+        JSON.stringify(reply.payload || reply.rawPayload || {}),
     }))
     .filter((entry) => entry.text && !entry.text.endsWith("{}"));
 
-  if (directReply && !entries.some((entry) => entry.text.includes(directReply))) {
+  if (
+    directReply &&
+    !entries.some((entry) => entry.text.includes(directReply))
+  ) {
     entries.unshift({ time: "", text: directReply });
   }
 
@@ -1606,7 +1796,9 @@ function formatReplyHistory(row) {
 // "Execute the Trade" and a red cross for "Deny". Any other reply text is
 // shown as-is with no icon.
 function getReplyIndicatorHtml(text) {
-  const normalized = String(text || "").trim().toLowerCase();
+  const normalized = String(text || "")
+    .trim()
+    .toLowerCase();
   if (normalized === "execute the trade") {
     return '<span class="reply-icon reply-icon-positive" title="Execute the Trade">&#10003;</span>';
   }
@@ -1630,8 +1822,16 @@ function formatReplyHistoryHtml(row) {
 
 function getReplyTime(row) {
   if (row.lastReplyAt) return displayDate(row.lastReplyAt);
-  if (row.inboundReply?.receivedAt || row.inboundReply?.statusUpdatedAt || row.inboundReply?.updatedAt) {
-    return displayDate(row.inboundReply.receivedAt || row.inboundReply.statusUpdatedAt || row.inboundReply.updatedAt);
+  if (
+    row.inboundReply?.receivedAt ||
+    row.inboundReply?.statusUpdatedAt ||
+    row.inboundReply?.updatedAt
+  ) {
+    return displayDate(
+      row.inboundReply.receivedAt ||
+        row.inboundReply.statusUpdatedAt ||
+        row.inboundReply.updatedAt,
+    );
   }
   const history = Array.isArray(row.replyHistory) ? row.replyHistory : [];
   const latest = history
@@ -1645,8 +1845,15 @@ function parseMaybeJson(value) {
   if (!value || typeof value !== "string") return value;
   const trimmed = value.trim();
   if (!trimmed) return value;
-  if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
-    try { return JSON.parse(trimmed); } catch (error) { return value; }
+  if (
+    (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+    (trimmed.startsWith("[") && trimmed.endsWith("]"))
+  ) {
+    try {
+      return JSON.parse(trimmed);
+    } catch (error) {
+      return value;
+    }
   }
   return value;
 }
@@ -1658,14 +1865,33 @@ function extractReplyTextFromPayload(payload) {
   const messages = parseMaybeJson(payload.messages);
 
   if (payload.text) return String(payload.text);
-  if (button && typeof button === "object") return button.text || button.payload || button.title || "";
+  if (button && typeof button === "object")
+    return button.text || button.payload || button.title || "";
   if (typeof button === "string") return button;
   if (interactive && typeof interactive === "object") {
-    return interactive.button_reply?.title || interactive.list_reply?.title || interactive.button_reply?.id || interactive.list_reply?.id || "";
+    return (
+      interactive.button_reply?.title ||
+      interactive.list_reply?.title ||
+      interactive.button_reply?.id ||
+      interactive.list_reply?.id ||
+      ""
+    );
   }
   if (typeof interactive === "string") return interactive;
   if (Array.isArray(messages)) {
-    return messages.map((message) => message?.text?.body || message?.button?.text || message?.button?.payload || message?.interactive?.button_reply?.title || message?.interactive?.list_reply?.title || message?.reaction?.emoji || "").filter(Boolean).join(" | ");
+    return messages
+      .map(
+        (message) =>
+          message?.text?.body ||
+          message?.button?.text ||
+          message?.button?.payload ||
+          message?.interactive?.button_reply?.title ||
+          message?.interactive?.list_reply?.title ||
+          message?.reaction?.emoji ||
+          "",
+      )
+      .filter(Boolean)
+      .join(" | ");
   }
   if (payload.caption) return String(payload.caption);
   if (payload.reaction) return String(payload.reaction);
@@ -1685,17 +1911,23 @@ function getMessageText(row) {
 }
 
 function getCsvField(row, candidates = []) {
-  const data = row?.csvRowData && typeof row.csvRowData === "object" ? row.csvRowData : {};
+  const data =
+    row?.csvRowData && typeof row.csvRowData === "object" ? row.csvRowData : {};
   const normalized = Object.fromEntries(
     Object.entries(data).map(([key, value]) => [
-      String(key).toLowerCase().replace(/[^a-z0-9]+/g, ""),
+      String(key)
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ""),
       value,
     ]),
   );
   for (const candidate of candidates) {
-    const key = String(candidate).toLowerCase().replace(/[^a-z0-9]+/g, "");
+    const key = String(candidate)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "");
     const value = normalized[key];
-    if (value !== undefined && value !== null && String(value).trim()) return String(value).trim();
+    if (value !== undefined && value !== null && String(value).trim())
+      return String(value).trim();
   }
   return "";
 }
@@ -1703,7 +1935,13 @@ function getCsvField(row, candidates = []) {
 function getCustomerName(row) {
   return (
     row.customerName ||
-    getCsvField(row, ["Customer Name", "Client Name", "Name", "Customer", "Client"]) ||
+    getCsvField(row, [
+      "Customer Name",
+      "Client Name",
+      "Name",
+      "Customer",
+      "Client",
+    ]) ||
     "-"
   );
 }
@@ -1711,14 +1949,25 @@ function getCustomerName(row) {
 function getSentMessage(row) {
   if (row.sentMessage) return row.sentMessage;
   const parts = [
-    ["Stock Name", getCsvField(row, ["Stock Name", "Stock", "Scrip", "Symbol"])],
-    ["Client Name", getCsvField(row, ["Client Name", "Customer Name", "Name", "Client"])],
+    [
+      "Stock Name",
+      getCsvField(row, ["Stock Name", "Stock", "Scrip", "Symbol"]),
+    ],
+    [
+      "Client Name",
+      getCsvField(row, ["Client Name", "Customer Name", "Name", "Client"]),
+    ],
     ["Price", getCsvField(row, ["Price", "PRICE", "Rate"])],
     ["Client Code", getCsvField(row, ["Client Code", "ClientCode", "Code"])],
-    ["Order Type", getCsvField(row, ["Order Type", "OrderType", "Buy/Sell", "Side"])],
+    [
+      "Order Type",
+      getCsvField(row, ["Order Type", "OrderType", "Buy/Sell", "Side"]),
+    ],
     ["Qty", getCsvField(row, ["Qty", "QTY", "Quantity"])],
   ].filter(([, value]) => value);
-  return parts.length ? parts.map(([label, value]) => `${label}: ${value}`).join(" | ") : "-";
+  return parts.length
+    ? parts.map(([label, value]) => `${label}: ${value}`).join(" | ")
+    : "-";
 }
 
 function flattenPayload(value, prefix = "", result = {}) {
@@ -1741,7 +1990,9 @@ function flattenPayload(value, prefix = "", result = {}) {
 function getDynamicResponse(row) {
   const payload = flattenPayload(row.rawPayload || {});
   return Object.entries(payload)
-    .filter(([, value]) => value !== null && value !== undefined && value !== "")
+    .filter(
+      ([, value]) => value !== null && value !== undefined && value !== "",
+    )
     .slice(0, 12)
     .map(([key, value]) => `${key}: ${String(value)}`)
     .join("\n");
@@ -1757,9 +2008,46 @@ function getFriendlyStatus(row) {
 
 function getMatchedMessageStatus(row) {
   const parts = [];
-  if (row.numberCurrentStatus) parts.push(`Message: ${row.numberCurrentStatus}`);
-  if (row.numberDeliveryStatus) parts.push(`Delivery: ${row.numberDeliveryStatus}`);
+  if (row.numberCurrentStatus)
+    parts.push(`Message: ${row.numberCurrentStatus}`);
+  if (row.numberDeliveryStatus)
+    parts.push(`Delivery: ${row.numberDeliveryStatus}`);
   return parts.join("\n") || "-";
+}
+
+function getSentDeliveryStatus(row) {
+  return (
+    row.numberDeliveryStatus ||
+    row.deliveryStatus ||
+    (row.eventType === "outbound" ? row.normalizedStatus : "") ||
+    ""
+  );
+}
+
+function getReceivedDeliveryStatus(row) {
+  if (row.eventType === "inbound") return "Customer replied";
+  if (row.customReply || row.lastReplyAt) return "Customer replied";
+  return "";
+}
+
+function buildDeliveryStatusHtml(row) {
+  const sentStatus = getSentDeliveryStatus(row) || "-";
+  const receivedStatus = getReceivedDeliveryStatus(row) || "-";
+  return `
+    <div class="stacked-cell">
+      <div><span>Sent:</span> ${escapeHtml(sentStatus)}</div>
+      <div><span>Received:</span> ${escapeHtml(receivedStatus)}</div>
+    </div>
+  `;
+}
+
+function buildMessageSummaryHtml(sentMessageText, receivedMessageHtml) {
+  return `
+    <div class="message-summary-cell">
+      <div><span>Sent:</span> ${escapeHtml(sentMessageText || "-")}</div>
+      <div><span>Received:</span> ${receivedMessageHtml || "-"}</div>
+    </div>
+  `;
 }
 
 function renderCustomSummary(rows) {
@@ -1773,11 +2061,11 @@ function renderCustomSummary(rows) {
   };
 
   customReportSummaryGrid.innerHTML = [
-    ["Total events", counts.total],
-    ["Sent", counts.sent],
-    ["Delivered / read", counts.delivered],
-    ["Failed", counts.failed],
+    ["Total Contacts", counts.total],
+    ["Read By Customer", counts.delivered],
     ["Customer replies", counts.replied],
+    ["Unknown Status", counts.sent],
+    ["Tech. Issues", counts.failed],
   ]
     .map(
       ([label, value]) =>
@@ -1799,7 +2087,8 @@ async function refreshCustomReport() {
 async function _doRefreshCustomReport() {
   if (customScope.value === "selected" && !selectedUploadId) {
     lastCustomReportRows = [];
-    customReportSummary.textContent = "Select an upload first to create a selected-upload report.";
+    customReportSummary.textContent =
+      "Select an upload first to create a selected-upload report.";
     renderCustomSummary([]);
     customReportTableBody.innerHTML = "";
     return;
@@ -1810,16 +2099,24 @@ async function _doRefreshCustomReport() {
   );
   lastCustomReportRows = rows;
   const scopeText =
-    customScope.value === "selected" ? "the selected upload report" : "all transactions + webhook events";
+    customScope.value === "selected"
+      ? "the selected upload report"
+      : "all transactions + webhook events";
   const dateText =
     customStartDateTime.value && customEndDateTime.value
       ? ` from ${new Date(customStartDateTime.value).toLocaleDateString("en-IN", { timeZone: "Asia/Calcutta" })} to ${new Date(customEndDateTime.value).toLocaleDateString("en-IN", { timeZone: "Asia/Calcutta" })}`
       : "";
   const activeFilterText = [
-    customEventType.value !== "all" ? `type ${customEventType.options[customEventType.selectedIndex]?.textContent || customEventType.value}` : "",
-    customStatus.value !== "all" ? `status ${customStatus.options[customStatus.selectedIndex]?.textContent || customStatus.value}` : "",
+    customEventType.value !== "all"
+      ? `type ${customEventType.options[customEventType.selectedIndex]?.textContent || customEventType.value}`
+      : "",
+    customStatus.value !== "all"
+      ? `status ${customStatus.options[customStatus.selectedIndex]?.textContent || customStatus.value}`
+      : "",
     customSearch.value.trim() ? `search "${customSearch.value.trim()}"` : "",
-  ].filter(Boolean).join(", ");
+  ]
+    .filter(Boolean)
+    .join(", ");
   customReportSummary.textContent = rows.length
     ? `${rows.length} records found for ${scopeText}${dateText}.`
     : `No records found for ${scopeText}${dateText}${activeFilterText ? ` with ${activeFilterText}` : ""}. Try All types and All statuses to see sent transactions.`;
@@ -1836,13 +2133,17 @@ async function _doRefreshCustomReport() {
     const payloadPresent = isJsonLike(row.rawPayload);
     const readableIsJson = payloadPresent || isJsonLike(readableText);
     const dynamicIsJson = payloadPresent || isJsonLike(dynamicText);
-    const reasonText = String(row.reason || row.cleverTapErrorReason || "").toLowerCase();
+    const reasonText = String(
+      row.reason || row.cleverTapErrorReason || "",
+    ).toLowerCase();
     const isDenied = reasonText === "deny";
 
     // Denied flow replies are individual inbound events; show only this event's reply text here.
     let dynamicCellHtml = "";
     if (isDenied) {
-      dynamicCellHtml = escapeHtml(readableText || row.text || row.customReply || "-");
+      dynamicCellHtml = escapeHtml(
+        readableText || row.text || row.customReply || "-",
+      );
     } else if (dynamicIsJson) {
       dynamicCellHtml = `<button type="button" class="json-view-button small-button" data-report-index="${index}" data-tooltip="View JSON">View JSON</button>`;
     } else {
@@ -1859,65 +2160,86 @@ async function _doRefreshCustomReport() {
       : escapeHtml(readableText);
 
     // Append updatedAt info to reason if present
-    const reasonBase = escapeHtml(row.reason || row.cleverTapErrorReason || "-");
-    const updatedNote = row.updatedAt ? `<div class="small-note">Updated: ${escapeHtml(displayDate(row.updatedAt))}</div>` : "";
+    const reasonBase = escapeHtml(
+      row.reason || row.cleverTapErrorReason || "-",
+    );
+    const updatedNote = row.updatedAt
+      ? `<div class="small-note">Updated: ${escapeHtml(displayDate(row.updatedAt))}</div>`
+      : "";
 
     // Generate SaaS Badge structures
-    const typeClass = row.eventType === "inbound" ? "event-inbound" : "event-outbound";
+    const typeClass =
+      row.eventType === "inbound" ? "event-inbound" : "event-outbound";
     const typeLabel = row.eventType === "inbound" ? "Inbound" : "Outbound";
     const typeHtml = `<span class="${typeClass}">${typeLabel}</span>`;
 
     const friendlyStatus = getFriendlyStatus(row);
     let statusClass = "badge-pending";
     if (friendlyStatus === "Customer replied") statusClass = "badge-replied";
-    else if (friendlyStatus === "Delivered / read") statusClass = "badge-delivered";
+    else if (friendlyStatus === "Delivered / read")
+      statusClass = "badge-delivered";
     else if (friendlyStatus === "Failed") statusClass = "badge-failed";
-    else if (friendlyStatus === "Sent to MSG91" || friendlyStatus === "sent") statusClass = "badge-sent";
+    else if (friendlyStatus === "Sent to MSG91" || friendlyStatus === "sent")
+      statusClass = "badge-sent";
     const statusHtml = `<span class="badge ${statusClass}">${escapeHtml(friendlyStatus)}</span>`;
 
     const mobileHtml = `<span class="mobile-pill">${escapeHtml(row.normalizedMobile || row.customerNumber || "-")}</span>`;
-    const templateHtml = templateOrCampaign !== "-" ? `<span class="template-tag">${escapeHtml(templateOrCampaign)}</span>` : "-";
+    const templateHtml =
+      templateOrCampaign !== "-"
+        ? `<span class="template-tag">${escapeHtml(templateOrCampaign)}</span>`
+        : "-";
 
     // Extract Sender Number and look up friendly RM label
     const senderNumber = row.integratedNumber || row.integrated_number || "";
     let senderLabel = senderNumber;
     if (senderNumber && msg91Config?.integratedNumbers) {
       const matchRM = msg91Config.integratedNumbers.find(
-        (n) => String(n.number) === String(senderNumber) || String(n.id) === String(senderNumber)
+        (n) =>
+          String(n.number) === String(senderNumber) ||
+          String(n.id) === String(senderNumber),
       );
       if (matchRM) {
         senderLabel = matchRM.label || matchRM.number;
       }
     }
-    const senderHtml = senderLabel 
+    const senderHtml = senderLabel
       ? `<span class="badge badge-sent" style="font-size: 11px; padding: 2px 8px;">${escapeHtml(senderLabel)}</span>`
       : `<span class="small-note">-</span>`;
 
     const customerReplyHtml = formatReplyHistoryHtml(row);
     const replyTimeText = getReplyTime(row);
     const sentMessageText = getSentMessage(row);
+    const receivedMessageHtml =
+      customerReplyHtml && customerReplyHtml !== "-"
+        ? customerReplyHtml
+        : escapeHtml(readableText || row.text || row.customReply || "-");
+    const messageSummaryHtml = buildMessageSummaryHtml(
+      sentMessageText,
+      receivedMessageHtml,
+    );
 
     tr.innerHTML = `
       <td>${index + 1}</td>
       <td>${escapeHtml(displayDate(row.receivedAt || row.statusUpdatedAt || row.requestedAt))}</td>
+      <td style="font-weight: 600; color: var(--text-primary);">${escapeHtml(getCustomerName(row))}</td>
+      <td>${mobileHtml}</td>
+      <td>${senderHtml}</td>
+      <td class="delivery-summary-cell">${buildDeliveryStatusHtml(row)}</td>
+      <td>${messageSummaryHtml}</td>
       <td>${typeHtml}</td>
       <td class="status-cell">${statusHtml}</td>
       <td class="status-detail-cell">${escapeHtml(getMatchedMessageStatus(row))}</td>
-      <td>${senderHtml}</td>
-      <td>${mobileHtml}</td>
-      <td style="font-weight: 600; color: var(--text-primary);">${escapeHtml(getCustomerName(row))}</td>
       <td>${escapeHtml(row.uploadFileName || "-")}</td>
-      <td class="reply-text-cell" style="max-width:180px; white-space:pre-wrap; word-break:break-word;">${customerReplyHtml}</td>
       <td class="reply-time-cell" style="white-space:nowrap;">${escapeHtml(replyTimeText)}</td>
       <td>${templateHtml}</td>
-      <td><div class="raw-cell" style="max-width:280px; white-space:pre-wrap; word-break:break-word;">${escapeHtml(sentMessageText)}</div></td>
-      <td>${readableCellHtml}</td>
       <td>${dynamicCellHtml}</td>
       <td>${reasonBase}${updatedNote}</td>
     `;
 
     // If a row for this event already exists in the table, replace its contents; otherwise append
-    const existing = customReportTableBody.querySelector(`tr[data-event-id="${eventKey}"]`);
+    const existing = customReportTableBody.querySelector(
+      `tr[data-event-id="${eventKey}"]`,
+    );
     if (existing) {
       existing.innerHTML = tr.innerHTML;
       existing.dataset.reportIndex = String(index);
@@ -1925,6 +2247,7 @@ async function _doRefreshCustomReport() {
       customReportTableBody.appendChild(tr);
     }
   });
+
 }
 
 // Help button for Custom Report header
@@ -2070,3 +2393,4 @@ loadMsg91Config().then(() => {
   refreshDashboard();
   setInterval(refreshDashboard, 10000);
 });
+

@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
@@ -546,7 +546,7 @@
             <div class="field-row">
               <input id="deliveryPhoneSearch" type="text" placeholder="Search delivery phone" />
               <button id="deliveryReportRefreshButton" class="secondary-button">
-                <span id="deliveryReportRefreshIcon">⟳</span>
+                <span id="deliveryReportRefreshIcon">âŸ³</span>
                 <span id="deliveryReportRefreshLabel">Refresh Report</span>
               </button>
             </div>
@@ -563,6 +563,8 @@
         <section id="tab-webhook" class="tab-content">
           <div class="section">
             <h3>MSG91 Webhook Report <button id="customReportHelp" class="secondary-button small-button">Help</button></h3>
+
+            <div id="customReportSummaryGrid" class="summary-grid"></div>
             <div class="filter-row">
               <select id="customScope"><option value="all">All transactions + webhook events</option><option value="selected">Selected upload report</option></select>
               <select id="customNumberFilter"><option value="all">All sender numbers</option></select>
@@ -579,20 +581,20 @@
               <button id="customReportEmailRMs" class="secondary-button">Email RM Reports</button>
               <button id="customReportSchedule" class="secondary-button">Schedule</button>
             </div>
-            <input id="customStartDateTime" type="hidden" />
-            <input id="customEndDateTime" type="hidden" />
-            <div id="customReportSummary" class="small-note">Open this tab to load webhook records.</div>
-            <div id="customReportSummaryGrid" class="summary-grid"></div>
-            <div class="table-wrap">
-              <table id="customReportTable">
-                <thead>
-                  <tr>
-                    <th>#</th><th>Received</th><th>Type</th><th>Status</th><th>Matched Status</th><th>IPK Sender</th><th>Mobile</th><th>Customer Name</th><th>Upload</th><th>Customer Reply</th><th>Reply Time</th><th>Template</th><th>Sent Message</th><th>Message</th><th>Dynamic Response</th><th>Reason</th>
-                  </tr>
-                </thead>
-                <tbody id="customReportTableBody"></tbody>
-              </table>
-            </div>
+
+              <input id="customStartDateTime" type="hidden" />
+              <input id="customEndDateTime" type="hidden" />
+              <div id="customReportSummary" class="small-note">Open this tab to load webhook records.</div>
+              <div class="table-wrap">
+                <table id="customReportTable">
+                  <thead>
+                    <tr>
+                    <th>S.No.</th><th>Date &amp; Time</th><th>Customer Name</th><th>Customer Mobile</th><th>Sent From</th><th>Delivery Status</th><th>Message</th><th>Type</th><th>Status</th><th>Matched Status</th><th>Upload</th><th>Reply Time</th><th>Template</th><th>Dynamic Response</th><th>Reason</th>
+                    </tr>
+                  </thead>
+                  <tbody id="customReportTableBody"></tbody>
+                </table>
+              </div>
           </div>
         </section>
       </main>

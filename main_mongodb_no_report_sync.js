@@ -23,6 +23,18 @@ try {
 }
 // const { ipcMain } = require("electron");
 
+// Development (`npm start`) must not share the installed app's profile/cache or
+// single-instance lock. If the packaged app is already running in the tray, a
+// shared profile causes "Unable to move the cache: Access is denied" and the
+// dev process exits immediately after launch.
+if (!app.isPackaged) {
+  const devUserDataPath =
+    process.env.ELECTRON_USER_DATA_DIR ||
+    path.join(app.getPath("appData"), "webhook-msg91-dev");
+  app.setName("Webhook MSG91 Dev");
+  app.setPath("userData", devUserDataPath);
+}
+
 
 app.whenReady().then(() => {
   // Clear cache for the default session
@@ -76,7 +88,11 @@ try {
 }
 
 let mainWindow;
-const webhookPort = 3002;
+let webhookPort = Number(
+  process.env.ELECTRON_WEBHOOK_PORT ||
+    process.env.WEBHOOK_PORT ||
+    (app.isPackaged ? 3002 : 0),
+);
 const reportRefreshIntervalMs = 2000;
 const defaultWebhookBaseUrl = "https://crm.ipkwealth.com";
 let db;
@@ -427,6 +443,9 @@ async function deliverFileBySftp(filePath) {
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
 if (!gotSingleInstanceLock) {
+  console.warn(
+    "Another Webhook MSG91 instance is already running. Exiting this launch.",
+  );
   app.quit();
 }
 
@@ -2247,97 +2266,104 @@ async function listCustomReportRowsFromMongo(filters = {}) {
     .limit(5000)
     .toArray();
 
-  const rows = events.map((event, index) => {
-    const raw = parseJsonField(event.rawPayload, event.rawPayload || {});
-    const csvRowData = parseJsonField(event.csvRowData, {});
-    const text =
-      event.text ||
-      event.customReply ||
-      extractWebhookMessageText(raw || event);
-    return {
-      ...normalizeMongoDoc(event),
-      id: event.id || event.eventId || event.eventKey || `event-${index}`,
-      eventType: event.eventType || inferMsg91EventType(raw || event),
-      normalizedStatus:
-        event.normalizedStatus ||
+  const rows = await Promise.all(
+    events.map(async (event, index) => {
+      const raw = parseJsonField(event.rawPayload, event.rawPayload || {});
+      const csvRowData = parseJsonField(event.csvRowData, {});
+      const text =
+        event.text ||
+        event.customReply ||
+        extractWebhookMessageText(raw || event);
+      const inferredSentMessage =
         (event.eventType === "inbound"
-          ? "inbound"
-          : createStatusLabel(
-              event.eventName || event.statusCode || event.reason,
-            )),
-      normalizedMobile:
-        formatPhoneForCall(
+          ? await getMatchedSentMessageForInboundWebhookEvent(event)
+          : "") ||
+        getSentMessageForReport({ ...event, csvRowData });
+      return {
+        ...normalizeMongoDoc(event),
+        id: event.id || event.eventId || event.eventKey || `event-${index}`,
+        eventType: event.eventType || inferMsg91EventType(raw || event),
+        normalizedStatus:
+          event.normalizedStatus ||
+          (event.eventType === "inbound"
+            ? "inbound"
+            : createStatusLabel(
+                event.eventName || event.statusCode || event.reason,
+              )),
+        normalizedMobile:
+          formatPhoneForCall(
+            event.normalizedMobile ||
+              event.customerNumber ||
+              raw.customerNumber ||
+              raw.mobile ||
+              raw.to ||
+              extractMobileFromWebhookMessages(raw.messages),
+          ) || "",
+        customerNumber:
+          event.customerNumber ||
+          raw.customerNumber ||
+          raw.customer_number ||
           event.normalizedMobile ||
-            event.customerNumber ||
-            raw.customerNumber ||
-            raw.mobile ||
-            raw.to ||
-            extractMobileFromWebhookMessages(raw.messages),
-        ) || "",
-      customerNumber:
-        event.customerNumber ||
-        raw.customerNumber ||
-        raw.customer_number ||
-        event.normalizedMobile ||
-        "",
-      customerName:
-        event.customerName ||
-        raw.customerName ||
-        raw.customer_name ||
-        getCustomerNameForReport({ ...event, csvRowData }),
-      integratedNumber:
-        event.integratedNumber ||
-        event.integrated_number ||
-        raw.integratedNumber ||
-        raw.integrated_number ||
-        "",
-      integrated_number:
-        event.integrated_number ||
-        event.integratedNumber ||
-        raw.integrated_number ||
-        raw.integratedNumber ||
-        "",
-      templateName:
-        event.templateName || raw.templateName || raw.template_name || "",
-      campaignName:
-        event.campaignName || raw.campaignName || raw.campaign_name || "",
-      receivedAt:
-        event.receivedAt ||
-        event.statusUpdatedAt ||
-        event.requestedAt ||
-        event.createdAt ||
-        "",
-      requestedAt: event.requestedAt || raw.requestedAt || "",
-      statusUpdatedAt: event.statusUpdatedAt || raw.statusUpdatedAt || "",
-      requestId:
-        event.requestId ||
-        raw.requestId ||
-        raw.replyMsgId ||
-        raw.oneApiRequestId ||
-        raw.uuid ||
-        "",
-      sentMessage: getSentMessageForReport({ ...event, csvRowData }),
-      text,
-      customReply:
-        event.customReply || (event.eventType === "inbound" ? text : ""),
-      lastReplyAt:
-        event.lastReplyAt ||
-        (event.eventType === "inbound" ? event.receivedAt : ""),
-      rawPayload: raw || {},
-      reason:
-        event.reason ||
-        raw.reason ||
-        raw.cleverTapErrorReason ||
-        raw.cleverTapErrorCode ||
-        "",
-      price: event.price || raw.price || "",
-      numberCurrentStatus: event.numberCurrentStatus || "",
-      numberDeliveryStatus: event.numberDeliveryStatus || "",
-      uploadFileName: event.uploadFileName || "",
-      uploadTemplateLabel: event.uploadTemplateLabel || "",
-      csvRowData,
-    };
-  });
+          "",
+        customerName:
+          event.customerName ||
+          raw.customerName ||
+          raw.customer_name ||
+          getCustomerNameForReport({ ...event, csvRowData }),
+        integratedNumber:
+          event.integratedNumber ||
+          event.integrated_number ||
+          raw.integratedNumber ||
+          raw.integrated_number ||
+          "",
+        integrated_number:
+          event.integrated_number ||
+          event.integratedNumber ||
+          raw.integrated_number ||
+          raw.integratedNumber ||
+          "",
+        templateName:
+          event.templateName || raw.templateName || raw.template_name || "",
+        campaignName:
+          event.campaignName || raw.campaignName || raw.campaign_name || "",
+        receivedAt:
+          event.receivedAt ||
+          event.statusUpdatedAt ||
+          event.requestedAt ||
+          event.createdAt ||
+          "",
+        requestedAt: event.requestedAt || raw.requestedAt || "",
+        statusUpdatedAt: event.statusUpdatedAt || raw.statusUpdatedAt || "",
+        requestId:
+          event.requestId ||
+          raw.requestId ||
+          raw.replyMsgId ||
+          raw.oneApiRequestId ||
+          raw.uuid ||
+          "",
+        sentMessage: inferredSentMessage,
+        text,
+        customReply:
+          event.customReply || (event.eventType === "inbound" ? text : ""),
+        lastReplyAt:
+          event.lastReplyAt ||
+          (event.eventType === "inbound" ? event.receivedAt : ""),
+        rawPayload: raw || {},
+        reason:
+          event.reason ||
+          raw.reason ||
+          raw.cleverTapErrorReason ||
+          raw.cleverTapErrorCode ||
+          "",
+        price: event.price || raw.price || "",
+        numberCurrentStatus: event.numberCurrentStatus || "",
+        numberDeliveryStatus: event.numberDeliveryStatus || "",
+        uploadFileName: event.uploadFileName || "",
+        uploadTemplateLabel: event.uploadTemplateLabel || "",
+        csvRowData,
+      };
+    }),
+  );
 
   return rows.filter(
     (row) =>
@@ -2830,6 +2856,64 @@ function parseJsonField(value, fallback) {
 function stringifyResponseDetails(value) {
   if (value === undefined || value === null || value === "") return null;
   return JSON.stringify(value);
+}
+
+async function getMatchedSentMessageForInboundWebhookEvent(event) {
+  if (!event) return "";
+
+  const eventType = event.eventType || inferMsg91EventType(event.rawPayload || event);
+  if (eventType !== "inbound") return "";
+
+  const normalizedMobile =
+    formatPhoneForCall(
+      event.normalizedMobile || event.customerNumber || event.customer_number || "",
+    ) ||
+    formatPhoneForCall(
+      String(
+        event.rawPayload?.customerNumber ||
+          event.rawPayload?.customer_number ||
+          event.rawPayload?.mobile ||
+          event.rawPayload?.to ||
+          "",
+      ),
+    );
+
+  const matchedNumberId = Number(
+    event.matchedNumberId || event.numberId || event.messageNumberId || 0,
+  );
+  if (matchedNumberId) {
+    const numberRow = await getNumberById(matchedNumberId, { sentMessage: 1 });
+    if (numberRow?.sentMessage) return numberRow.sentMessage;
+  }
+
+  const matchedUploadId = Number(event.matchedUploadId || event.uploadId || 0);
+  if (matchedUploadId && normalizedMobile) {
+    const numberRow = await mongoDb
+      .collection("whatsapp_numbers")
+      .findOne(
+        { uploadId: matchedUploadId, cleaned: normalizedMobile },
+        { projection: { sentMessage: 1 } },
+      );
+    if (numberRow?.sentMessage) return numberRow.sentMessage;
+
+    const senderReport = await mongoDb
+      .collection("whatsapp_sender_reports")
+      .findOne(
+        {
+          uploadId: matchedUploadId,
+          $or: [
+            { mobile: normalizedMobile },
+            { cleaned: normalizedMobile },
+            { customerNumber: normalizedMobile },
+            { customer_number: normalizedMobile },
+          ],
+        },
+        { projection: { sentMessage: 1 } },
+      );
+    if (senderReport?.sentMessage) return senderReport.sentMessage;
+  }
+
+  return "";
 }
 
 function appendReplyHistory(existingValue, reply) {
@@ -4092,6 +4176,10 @@ function startWebhookServer() {
   return new Promise((resolve, reject) => {
     webhookServer = server
       .listen(webhookPort, "127.0.0.1", () => {
+        const address = webhookServer.address();
+        if (address && typeof address === "object" && address.port) {
+          webhookPort = address.port;
+        }
         console.log(
           `Webhook endpoint listening on http://127.0.0.1:${webhookPort}/webhook`,
         );
@@ -4998,33 +5086,56 @@ function groupRowsByTemplate(rows) {
   return groups;
 }
 
+function getSentDeliveryStatusForReport(row) {
+  return (
+    row.numberDeliveryStatus ||
+    row.deliveryStatus ||
+    (row.eventType === "outbound" ? row.normalizedStatus : "") ||
+    ""
+  );
+}
+
+function getReceivedDeliveryStatusForReport(row) {
+  if (row.eventType === "inbound") return "Customer replied";
+  if (row.customReply || row.lastReplyAt) return "Customer replied";
+  return "";
+}
+
+function getReceivedMessageForReport(row) {
+  return (
+    row.customReply ||
+    row.text ||
+    extractWebhookMessageText(row.rawPayload || row) ||
+    row.content ||
+    row.caption ||
+    row.button ||
+    row.messages ||
+    ""
+  );
+}
+
 function formatSingleRowForExcel(row, index) {
   return {
-    "#": index + 1,
-    Received: row.receivedAt || row.statusUpdatedAt || row.requestedAt || "",
+    "S.No.": index + 1,
+    "Date & Time": row.receivedAt || row.statusUpdatedAt || row.requestedAt || "",
+    "Customer Name": getCustomerNameForReport(row),
+    "Customer Mobile": row.normalizedMobile || row.customerNumber || "",
+    "Sent From": row.integratedNumber || row.integrated_number || "",
+    "Delivery Status": `Sent: ${getSentDeliveryStatusForReport(row) || "-"}\nReceived: ${getReceivedDeliveryStatusForReport(row) || "-"}`,
+    Message:
+      `Sent: ${getSentMessageForReport(row) || "-"}\nReceived: ${getReceivedMessageForReport(row) || "-"}`,
     Type: row.eventType || "",
     Status: row.normalizedStatus || "",
     "Message Status": row.numberCurrentStatus || "",
-    "Delivery Status": row.numberDeliveryStatus || "",
-    "IPK Sender": row.integratedNumber || row.integrated_number || "",
-    Mobile: row.normalizedMobile || row.customerNumber || "",
-    "Customer Name": getCustomerNameForReport(row),
+    "Technical Delivery Status": row.numberDeliveryStatus || "",
     Upload: row.uploadFileName || "",
+    "Customer Reply": row.customReply || "",
+    "Reply Time": row.lastReplyAt || "",
     "Request ID":
       row.requestId || row.oneApiRequestId || row.replyMsgId || row.uuid || "",
     "Template Name": getTemplateLabelForReport(row),
     Campaign: row.campaignName || "",
     "Sent Message": getSentMessageForReport(row),
-    Message:
-      row.text ||
-      extractWebhookMessageText(row.rawPayload || row) ||
-      row.content ||
-      row.caption ||
-      row.button ||
-      row.messages ||
-      "",
-    "Customer Reply": row.customReply || "",
-    "Reply Time": row.lastReplyAt || "",
     "Dynamic Response": JSON.stringify(row.rawPayload || {}),
     Reason: row.reason || row.cleverTapErrorReason || "",
     Price: row.price || "",
