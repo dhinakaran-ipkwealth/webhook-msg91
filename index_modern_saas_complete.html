@@ -238,6 +238,28 @@
         margin-top: 4px;
       }
 
+      .summary-item {
+        border-left: 4px solid transparent;
+      }
+
+      .summary-label {
+        color: #334155;
+        font-size: 13px;
+        font-weight: 800;
+      }
+
+      .summary-item p {
+        margin: 8px 0 0;
+        color: #64748b;
+        font-size: 12px;
+        line-height: 1.35;
+      }
+
+      .summary-item-good { border-left-color: var(--good); }
+      .summary-item-reply { border-left-color: var(--primary); }
+      .summary-item-pending { border-left-color: #f59e0b; }
+      .summary-item-bad { border-left-color: var(--bad); }
+
       .valid { border-left: 4px solid var(--good); }
       .invalid { border-left: 4px solid var(--bad); }
       .split-card-india { border-left: 4px solid var(--primary); }
@@ -303,6 +325,76 @@
       .region-india { background: var(--primary-soft); color: #174ea6; }
       .region-foreign { background: var(--good-soft); color: var(--good); }
       .region-invalid { background: var(--bad-soft); color: var(--bad); }
+
+      .stacked-cell,
+      .message-summary-cell {
+        display: grid;
+        gap: 6px;
+        white-space: pre-wrap;
+        word-break: break-word;
+        line-height: 1.35;
+      }
+
+      .stacked-cell span,
+      .message-summary-cell span {
+        font-size: 11px;
+        font-weight: 900;
+        text-transform: uppercase;
+      }
+
+      .status-line,
+      .message-part {
+        border-radius: 6px;
+        padding: 7px 9px;
+        border: 1px solid transparent;
+      }
+
+      .status-line-sent,
+      .message-part-sent {
+        background: var(--primary-soft);
+        border-color: #bfd3ff;
+        color: #174ea6;
+      }
+
+      .status-line-delivered {
+        background: var(--good-soft);
+        border-color: #b7ebd0;
+        color: var(--good);
+      }
+
+      .status-line-failed {
+        background: var(--bad-soft);
+        border-color: #fecaca;
+        color: var(--bad);
+      }
+
+      .status-line-replied,
+      .message-part-received {
+        background: #ecfdf5;
+        border-color: #a7f3d0;
+        color: #047857;
+      }
+
+      .status-line-pending {
+        background: var(--warn-soft);
+        border-color: #f8df9a;
+        color: var(--warn);
+      }
+
+      .message-part-pending {
+        background: #f8fafc;
+        border-color: var(--line);
+        color: var(--muted);
+      }
+
+      .delivery-summary-cell {
+        min-width: 170px;
+      }
+
+      .message-summary-cell {
+        min-width: 360px;
+        max-width: 520px;
+      }
 
       .raw-cell {
         max-height: 120px;
@@ -546,7 +638,7 @@
             <div class="field-row">
               <input id="deliveryPhoneSearch" type="text" placeholder="Search delivery phone" />
               <button id="deliveryReportRefreshButton" class="secondary-button">
-                <span id="deliveryReportRefreshIcon">âŸ³</span>
+                <span id="deliveryReportRefreshIcon">Refresh</span>
                 <span id="deliveryReportRefreshLabel">Refresh Report</span>
               </button>
             </div>

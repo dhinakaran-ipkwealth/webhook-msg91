@@ -639,13 +639,13 @@ function escapeHtml(value) {
 function getAlertIcon(type) {
   switch (type) {
     case "success":
-      return "âœ…";
+      return "Success";
     case "warning":
-      return "âš ï¸";
+      return "Warning";
     case "error":
-      return "âŒ";
+      return "Error";
     default:
-      return "â„¹ï¸";
+      return "Info";
   }
 }
 
@@ -1606,7 +1606,7 @@ function getReportRangeForPreset(preset) {
   const end = new Date(now);
 
   if (preset === "yesterday") {
-    // Yesterday 10:00 AM IST â†’ Today 10:00 AM IST
+    // Yesterday 10:00 AM IST to today 10:00 AM IST
     start.setDate(start.getDate() - 1);
     start.setHours(10, 0, 0, 0);
     end.setHours(10, 0, 0, 0);
@@ -1644,7 +1644,7 @@ function formatDateTimeDisplayLabel(startIso, endIso) {
     return "Select date range";
   }
   const fmt = (d) => d.toLocaleString("en-IN", { timeZone: "Asia/Calcutta" });
-  return `${fmt(startDate)} â€” ${fmt(endDate)}`;
+  return `${fmt(startDate)} to ${fmt(endDate)}`;
 }
 
 function updateDateRangeDisplay() {
@@ -1747,7 +1747,7 @@ function isJsonLike(value) {
 function truncateText(text, max = 120) {
   if (!text) return "";
   const s = String(text);
-  return s.length > max ? s.slice(0, max - 1) + "â€¦" : s;
+  return s.length > max ? s.slice(0, max - 3) + "..." : s;
 }
 
 function formatReplyHistoryEntries(row) {
@@ -1999,6 +1999,7 @@ function getDynamicResponse(row) {
 }
 
 function getFriendlyStatus(row) {
+  if (row.customReply || row.lastReplyAt) return "Customer replied";
   if (row.eventType === "inbound") return "Customer replied";
   if (row.normalizedStatus === "delivered") return "Delivered / read";
   if (row.normalizedStatus === "failed") return "Failed";
@@ -2030,46 +2031,165 @@ function getReceivedDeliveryStatus(row) {
   return "";
 }
 
+function getStatusTone(status) {
+  const normalized = String(status || "").toLowerCase();
+  if (normalized.includes("fail") || normalized.includes("deny")) return "failed";
+  if (normalized.includes("deliver") || normalized.includes("read")) return "delivered";
+  if (normalized.includes("reply")) return "replied";
+  if (normalized.includes("sent") || normalized.includes("submit")) return "sent";
+  return "pending";
+}
+
+function getStatusTimestamp(row, status) {
+  const tone = getStatusTone(status);
+  if (tone === "replied") return getReplyTime(row);
+  if (tone === "delivered" || tone === "failed") {
+    return displayDate(row.statusUpdatedAt || row.updatedAt || row.receivedAt || row.requestedAt);
+  }
+  return displayDate(row.requestedAt || row.sentAt || row.statusUpdatedAt || row.receivedAt);
+}
+
+function buildStatusLineHtml(label, status, timestamp) {
+  const tone = getStatusTone(status || label);
+  const timeText = timestamp && timestamp !== "-" ? ` at ${timestamp}` : "";
+  return `<div class="status-line status-line-${tone}"><span>${escapeHtml(label)}</span>${escapeHtml(timeText)}</div>`;
+}
+
 function buildDeliveryStatusHtml(row) {
   const sentStatus = getSentDeliveryStatus(row) || "-";
   const receivedStatus = getReceivedDeliveryStatus(row) || "-";
+  const lines = [];
+  const sentTime = displayDate(row.requestedAt || row.sentAt || row.receivedAt || row.statusUpdatedAt);
+  const deliveryTime = getStatusTimestamp(row, sentStatus);
+
+  lines.push(buildStatusLineHtml("Sent", "sent", sentTime));
+  if (sentStatus !== "-" && getStatusTone(sentStatus) !== "sent") {
+    const label = getStatusTone(sentStatus) === "failed" ? "Failed" : "Delivered";
+    lines.push(buildStatusLineHtml(label, sentStatus, deliveryTime));
+  } else if (sentStatus === "-") {
+    lines.push(buildStatusLineHtml("Delivery pending", "pending", ""));
+  }
+  if (receivedStatus !== "-") {
+    lines.push(buildStatusLineHtml("Customer replied", "replied", getReplyTime(row)));
+  }
+
   return `
-    <div class="stacked-cell">
-      <div><span>Sent:</span> ${escapeHtml(sentStatus)}</div>
-      <div><span>Received:</span> ${escapeHtml(receivedStatus)}</div>
+    <div class="stacked-cell status-stack">
+      ${lines.join("")}
     </div>
   `;
 }
 
 function buildMessageSummaryHtml(sentMessageText, receivedMessageHtml) {
+  const hasReceivedMessage = receivedMessageHtml && receivedMessageHtml !== "-";
   return `
     <div class="message-summary-cell">
-      <div><span>Sent:</span> ${escapeHtml(sentMessageText || "-")}</div>
-      <div><span>Received:</span> ${receivedMessageHtml || "-"}</div>
+      <div class="message-part message-part-sent"><span>Sent:</span> ${escapeHtml(sentMessageText || "-")}</div>
+      <div class="message-part ${hasReceivedMessage ? "message-part-received" : "message-part-pending"}"><span>Received:</span> ${receivedMessageHtml || "-"}</div>
     </div>
   `;
 }
 
+function getCustomerKey(row) {
+  return String(
+    row.normalizedMobile ||
+      row.mobile ||
+      row.customerNumber ||
+      row.to ||
+      row.phone ||
+      "",
+  ).trim();
+}
+
+function formatPercent(value, total) {
+  if (!total) return "0%";
+  const percent = (value / total) * 100;
+  return `${percent % 1 === 0 ? percent.toFixed(0) : percent.toFixed(1)}%`;
+}
+
 function renderCustomSummary(rows) {
+  const outboundRows = rows.filter((row) => row.eventType !== "inbound");
+  const uniqueCustomers = new Set(rows.map(getCustomerKey).filter(Boolean));
+  const repliedRows = rows.filter(
+    (row) => row.eventType === "inbound" || row.customReply || row.lastReplyAt,
+  );
+
+  // Total records are the exact rows currently visible after filters are applied.
+  // A customer may appear more than once because sent, delivered, failed, and reply
+  // webhooks can arrive as separate MSG91 events.
   const counts = {
     total: rows.length,
+    uniqueCustomers: uniqueCustomers.size,
+    outbound: outboundRows.length,
+    replyRate: formatPercent(
+      repliedRows.length,
+      uniqueCustomers.size || outboundRows.length,
+    ),
+    // "sent" means MSG91 accepted/submitted the message, but no delivered/read
+    // or failed callback has replaced it yet for the filtered report rows.
     sent: rows.filter((row) => row.normalizedStatus === "sent").length,
+    // MSG91 "read" callbacks are normalized as delivered by the webhook server,
+    // so this card answers whether the customer received/read the outbound message.
     delivered: rows.filter((row) => row.normalizedStatus === "delivered")
       .length,
+    // Customer replies are retrieved from inbound webhook rows. The reply text is
+    // extracted from text/content/button/interactive/messages fields, then matched
+    // to sent reports by replyMsgId/messageId/responseId and mobile fallback.
     failed: rows.filter((row) => row.normalizedStatus === "failed").length,
-    replied: rows.filter((row) => row.eventType === "inbound").length,
+    replied: repliedRows.length,
   };
 
-  customReportSummaryGrid.innerHTML = [
-    ["Total Contacts", counts.total],
-    ["Read By Customer", counts.delivered],
-    ["Customer replies", counts.replied],
-    ["Unknown Status", counts.sent],
-    ["Tech. Issues", counts.failed],
-  ]
+  const cards = [
+    {
+      label: "Report Rows",
+      value: counts.total,
+      note: "Visible sent, delivery, failed, and reply webhook events after filters.",
+    },
+    {
+      label: "Unique Customers",
+      value: counts.uniqueCustomers,
+      note: "Counted from customer mobile numbers in the filtered report.",
+    },
+    {
+      label: "Delivered / Read",
+      value: counts.delivered,
+      note: "Rows where MSG91 returned delivered or read status.",
+      tone: "good",
+    },
+    {
+      label: "Customer Replies",
+      value: counts.replied,
+      note: "Sent records that have inbound customer reply evidence.",
+      tone: "reply",
+    },
+    {
+      label: "Reply Rate",
+      value: counts.replyRate,
+      note: "Customer replies divided by unique customers in this view.",
+      tone: "reply",
+    },
+    {
+      label: "Awaiting Delivery Update",
+      value: counts.sent,
+      note: "Sent to MSG91, but no delivered/read/failed callback yet.",
+      tone: "pending",
+    },
+    {
+      label: "Failed / Technical Issues",
+      value: counts.failed,
+      note: "Rows where MSG91 returned failed, rejected, denied, or undelivered status.",
+      tone: "bad",
+    },
+  ];
+
+  customReportSummaryGrid.innerHTML = cards
     .map(
-      ([label, value]) =>
-        `<div class="summary-item">${escapeHtml(label)}<strong>${value}</strong></div>`,
+      (card) =>
+        `<div class="summary-item summary-item-${escapeHtml(card.tone || "neutral")}">
+          <div class="summary-label">${escapeHtml(card.label)}</div>
+          <strong>${escapeHtml(String(card.value))}</strong>
+          <p>${escapeHtml(card.note)}</p>
+        </div>`,
     )
     .join("");
 }
@@ -2101,7 +2221,7 @@ async function _doRefreshCustomReport() {
   const scopeText =
     customScope.value === "selected"
       ? "the selected upload report"
-      : "all transactions + webhook events";
+      : "the transaction compliance report";
   const dateText =
     customStartDateTime.value && customEndDateTime.value
       ? ` from ${new Date(customStartDateTime.value).toLocaleDateString("en-IN", { timeZone: "Asia/Calcutta" })} to ${new Date(customEndDateTime.value).toLocaleDateString("en-IN", { timeZone: "Asia/Calcutta" })}`
@@ -2170,7 +2290,7 @@ async function _doRefreshCustomReport() {
     // Generate SaaS Badge structures
     const typeClass =
       row.eventType === "inbound" ? "event-inbound" : "event-outbound";
-    const typeLabel = row.eventType === "inbound" ? "Inbound" : "Outbound";
+    const typeLabel = row.eventType === "inbound" ? "Reply event" : "Sent record";
     const typeHtml = `<span class="${typeClass}">${typeLabel}</span>`;
 
     const friendlyStatus = getFriendlyStatus(row);
@@ -2212,7 +2332,9 @@ async function _doRefreshCustomReport() {
     const receivedMessageHtml =
       customerReplyHtml && customerReplyHtml !== "-"
         ? customerReplyHtml
-        : escapeHtml(readableText || row.text || row.customReply || "-");
+        : row.eventType === "inbound"
+          ? escapeHtml(readableText || row.text || row.customReply || "-")
+          : "-";
     const messageSummaryHtml = buildMessageSummaryHtml(
       sentMessageText,
       receivedMessageHtml,

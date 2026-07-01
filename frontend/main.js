@@ -110,7 +110,7 @@ let scheduleConfig = null;
 let scheduleTimer = null;
 let dailyCacheTimer = null;
 
-// IST (Asia/Calcutta) timezone helpers — all MongoDB queries use UTC Date objects
+// IST (Asia/Calcutta) timezone helpers. All MongoDB queries use UTC Date objects.
 const IST_OFFSET_MINUTES = 330; // UTC+5:30
 
 function nowIST() {
@@ -122,7 +122,7 @@ function istLocalToUTC(istDate) {
 }
 
 // Returns { start, end } as UTC Date objects representing
-// yesterday HH:MM IST → today HH:MM IST (default 10:00 AM IST)
+// Yesterday HH:MM IST to today HH:MM IST (default 10:00 AM IST).
 function getTodayISTDataWindow(scheduleHour = 10, scheduleMin = 0) {
   const ist = nowIST();
   const y = ist.getUTCFullYear(), mo = ist.getUTCMonth(), d = ist.getUTCDate();
@@ -182,11 +182,11 @@ function scheduleNextRun(cfg) {
   async function runAndReschedule() {
     try {
       if (cfg.mechanism === "email") {
-        // Use yesterday HH:MM IST → today HH:MM IST window (UTC Date objects for MongoDB)
+        // Use yesterday HH:MM IST to today HH:MM IST window (UTC Date objects for MongoDB).
         const { start, end } = getTodayISTDataWindow(hh, mm);
         console.log(
           `Scheduled run triggered. Generating 24-hour RM and Admin reports ` +
-          `(${start.toISOString()} → ${end.toISOString()} UTC, i.e. ${cfg.time} IST yesterday to today)...`,
+          `(${start.toISOString()} to ${end.toISOString()} UTC, ${cfg.time} IST yesterday to today)...`,
         );
 
         const timeFilters = {
@@ -342,7 +342,7 @@ async function sendRmGroupedReportsDirect(filters = {}) {
     }
 
     // Determine the RM's email address.
-    // Priority: msg91.config.json "email" field → env RM_EMAIL_<number> → admin fallback.
+    // Priority: msg91.config.json "email" field, then env RM_EMAIL_<number>, then admin fallback.
     let rmEmail = rm.email || "";
     if (!rmEmail) {
       rmEmail =
@@ -1751,7 +1751,7 @@ async function findNumberByMessageKey(normalized, context = {}) {
     .toArray();
 
   // When the same wamid was written to multiple rows (same phone, multiple
-  // orders in one batch — the pre-fix behaviour), prefer the oldest row that
+  // orders in one batch - the pre-fix behaviour), prefer the oldest row that
   // hasn't received a reply yet so each order gets its own reply instead of
   // all replies collapsing onto the first row.
   const row =
@@ -2460,6 +2460,12 @@ async function listSenderReportRowsForCustomReport(filters = {}) {
       rawPayload.integrated_number ||
       "";
     const replyHistory = parseJsonField(report.replyHistory, []);
+    const replyItems = normalizeReplyHistoryItems(
+      replyHistory,
+      report.customReply,
+      report.lastReplyAt,
+      report.replyWebhook || null,
+    );
     const baseRow = {
       ...normalizeMongoDoc(report),
       id:
@@ -2502,7 +2508,7 @@ async function listSenderReportRowsForCustomReport(filters = {}) {
       sentMessage: getSentMessageForReport({ ...report, csvRowData }),
       text: report.sentMessage || "",
       customReply: report.customReply || getReplyTextFromHistory(replyHistory),
-      replyHistory,
+      replyHistory: replyItems,
       lastReplyAt: report.lastReplyAt || "",
       csvRowData,
       rawPayload,
@@ -2510,48 +2516,27 @@ async function listSenderReportRowsForCustomReport(filters = {}) {
       updatedAt: report.updatedAt || report.lastUpdated || "",
     };
 
+    // SEBI/compliance report rule: one row per sent transaction.
+    // Customer replies are evidence on the sent row, not extra S.No. rows.
     rows.push(baseRow);
-
-    const replyItems = normalizeReplyHistoryItems(
-      replyHistory,
-      report.customReply,
-      report.lastReplyAt,
-      report.replyWebhook || null,
-    );
-    replyItems.forEach((reply, replyIndex) => {
-      rows.push({
-        ...baseRow,
-        id: `${baseRow.id}-reply-${replyIndex + 1}`,
-        eventType: "inbound",
-        normalizedStatus: "inbound",
-        receivedAt:
-          reply.receivedAt || baseRow.lastReplyAt || baseRow.receivedAt,
-        requestedAt:
-          reply.receivedAt || baseRow.lastReplyAt || baseRow.requestedAt,
-        statusUpdatedAt: reply.receivedAt || baseRow.statusUpdatedAt,
-        text: reply.text,
-        customReply: reply.text,
-        lastReplyAt: reply.receivedAt || baseRow.lastReplyAt,
-        rawPayload: reply.rawPayload || {},
-        reason: "",
-      });
-    });
   });
 
   return rows.filter((row) => {
     if (
       filters.eventType &&
       filters.eventType !== "all" &&
-      row.eventType !== filters.eventType
+      !(
+        row.eventType === filters.eventType ||
+        (filters.eventType === "inbound" && (row.customReply || row.lastReplyAt))
+      )
     ) {
       return false;
     }
 
     if (filters.status && filters.status !== "all") {
       if (filters.status === "inbound") {
-        if (row.eventType !== "inbound") return false;
+        if (!(row.customReply || row.lastReplyAt)) return false;
       } else if (
-        row.eventType !== "inbound" &&
         row.normalizedStatus !== filters.status &&
         row.numberDeliveryStatus !== filters.status &&
         row.numberCurrentStatus !== filters.status
@@ -2651,9 +2636,9 @@ function formatPhoneForCall(input) {
 function isValidWhatsappNumber(cleaned) {
   if (!cleaned) return false;
   if (/^91[6-9]\d{9}$/.test(cleaned)) return true; // Indian mobile (91 + 6/7/8/9 + 9 digits)
-  if (/^91\d{10}$/.test(cleaned)) return false; // Indian non-mobile — WhatsApp unsupported
+  if (/^91\d{10}$/.test(cleaned)) return false; // Indian non-mobile - WhatsApp unsupported
   if (/^65[89]\d{7}$/.test(cleaned)) return true; // Singapore mobile (65 + 8/9 + 7 digits)
-  if (/^65\d{8}$/.test(cleaned)) return false; // Singapore landline — WhatsApp unsupported
+  if (/^65\d{8}$/.test(cleaned)) return false; // Singapore landline - WhatsApp unsupported
   return /^[1-9]\d{7,14}$/.test(cleaned);
 }
 
@@ -2859,7 +2844,10 @@ function stringifyResponseDetails(value) {
 }
 
 async function getMatchedSentMessageForInboundWebhookEvent(event) {
-  if (!event || event.eventType !== "inbound") return "";
+  if (!event) return "";
+
+  const eventType = event.eventType || inferMsg91EventType(event.rawPayload || event);
+  if (eventType !== "inbound") return "";
 
   const normalizedMobile =
     formatPhoneForCall(
@@ -2867,8 +2855,11 @@ async function getMatchedSentMessageForInboundWebhookEvent(event) {
     ) ||
     formatPhoneForCall(
       String(
-        event.rawPayload?.customerNumber || event.rawPayload?.customer_number ||
-          event.rawPayload?.mobile || event.rawPayload?.to || "",
+        event.rawPayload?.customerNumber ||
+          event.rawPayload?.customer_number ||
+          event.rawPayload?.mobile ||
+          event.rawPayload?.to ||
+          "",
       ),
     );
 
@@ -2915,6 +2906,40 @@ function appendReplyHistory(existingValue, reply) {
   const history = Array.isArray(parsedHistory) ? parsedHistory : [];
   history.push(reply);
   return JSON.stringify(history.slice(-50));
+}
+
+async function mirrorNumberById(numberId) {
+  if (!numberId) return;
+  const row = await getNumberById(numberId);
+  if (!row) return;
+  await mirrorMongo("whatsapp_numbers", (collection) =>
+    collection.updateOne(
+      { uploadId: row.uploadId, numberId: row.id },
+      {
+        $set: {
+          uploadId: row.uploadId,
+          numberId: row.id,
+          original: row.original,
+          cleaned: row.cleaned,
+          valid: Boolean(row.valid),
+          data: parseRowData(row),
+          currentStatus: row.currentStatus,
+          deliveryStatus: row.deliveryStatus,
+          retryCount: row.retryCount || 0,
+          responseId: row.responseId,
+          messageId: row.messageId,
+          responseDetails: parseJsonField(row.responseDetails, null),
+          sentMessage: row.sentMessage || null,
+          customReply: row.customReply || null,
+          replyHistory: parseJsonField(row.replyHistory, []),
+          lastReplyAt: row.lastReplyAt || null,
+          lastUpdated: row.lastUpdated,
+          updatedAt: new Date().toISOString(),
+        },
+      },
+      { upsert: true },
+    ),
+  );
 }
 
 function getTemplateComponentValue(rowData, component, mapping) {
@@ -4289,12 +4314,12 @@ async function getInboundReplyMapForUpload(uploadId) {
 }
 
 // inboundEvents: event[] from byNumberId only (exact matched to this row).
-// byMobile is no longer used — it caused unrelated historical replies to appear.
+// byMobile is no longer used because it caused unrelated historical replies to appear.
 function mergeReportReplyFields(numberRow, senderReport, inboundEvents) {
   const inboundList = Array.isArray(inboundEvents) ? inboundEvents : [];
 
   // customReply: only from the fields set by applyInboundReplyToReports for THIS row.
-  // Never fall back to general inbound events — a customer in 90 uploads would
+  // Never fall back to general inbound events because a customer in 90 uploads would
   // otherwise have every row show the same latest reply regardless of which
   // message they actually replied to.
   const customReply = numberRow.customReply || senderReport?.customReply || "";
@@ -4426,7 +4451,7 @@ ipcMain.handle("fetch-report", async (event, uploadId) => {
       senderReportMap.byMobile.get(mobile) ||
       null;
     // byNumberId: events whose matchedNumberId = this row (written back by EC2 server).
-    // byMobile is no longer used — caused wrong replies from other uploads to show.
+    // byMobile is no longer used because it caused wrong replies from other uploads to show.
     const inboundEvents = inboundReplyMap.byNumberId.get(numberId) || [];
     const mergedReply = mergeReportReplyFields(row, senderReport, inboundEvents);
 
@@ -4483,7 +4508,7 @@ ipcMain.handle("fetch-sender-stats", async (event, filters = {}) => {
 
   const match = {};
   if (filters.todayOnly) {
-    // "Today" = yesterday 10:00 AM IST → today 10:00 AM IST (stored as UTC in MongoDB)
+    // "Today" = yesterday 10:00 AM IST to today 10:00 AM IST (stored as UTC in MongoDB).
     const { start, end } = getTodayISTDataWindow(10, 0);
     match.sentAt = { $gte: start.toISOString(), $lt: end.toISOString() };
   } else if (filters.startDateTime || filters.endDateTime) {
@@ -4565,7 +4590,7 @@ ipcMain.handle("schedule-run-now", async () => {
         "Manual trigger for schedule-run-now starting (Email flow with 24-hour RM/Admin split)...",
       );
       const [hh, mm] = (cfg.time || "10:00").split(":").map((v) => Number(v));
-      // Use yesterday HH:MM IST → today HH:MM IST window (UTC for MongoDB)
+      // Use yesterday HH:MM IST to today HH:MM IST window (UTC for MongoDB).
       const { start, end } = getTodayISTDataWindow(hh, mm);
 
       const filters = {
@@ -4661,6 +4686,7 @@ function reportRowMatchesDateRange(row, filters = {}) {
     row.receivedAt,
     row.statusUpdatedAt,
     row.requestedAt,
+    row.lastReplyAt,
     row.updatedAt,
   ]
     .filter(Boolean)
@@ -4766,6 +4792,12 @@ async function listSelectedUploadReportRows(filters = {}) {
     const latestReplyText =
       mergedReply.customReply ||
       getReplyTextFromHistory(mergedReply.replyHistory);
+    const replyItems = normalizeReplyHistoryItems(
+      mergedReply.replyHistory,
+      latestReplyText,
+      mergedReply.lastReplyAt,
+      inboundEvents[0]?.rawPayload || inboundEvents[0] || null,
+    );
     const outboundPayload =
       mergedReply.responseDetails || senderReport?.responseDetails || {};
     const baseRow = {
@@ -4822,6 +4854,7 @@ async function listSelectedUploadReportRows(filters = {}) {
       }),
       text: mergedReply.sentMessage || row.sentMessage || "",
       customReply: latestReplyText,
+      replyHistory: replyItems,
       lastReplyAt: mergedReply.lastReplyAt || "",
       csvRowData,
       rawPayload: outboundPayload,
@@ -4829,33 +4862,9 @@ async function listSelectedUploadReportRows(filters = {}) {
       updatedAt: row.updatedAt || row.lastUpdated || "",
     };
 
+    // SEBI/compliance report rule: one row per sent transaction.
+    // Customer replies are evidence on the sent row, not extra S.No. rows.
     mappedRows.push(baseRow);
-
-    const replyItems = normalizeReplyHistoryItems(
-      mergedReply.replyHistory,
-      latestReplyText,
-      mergedReply.lastReplyAt,
-      inboundEvents[0]?.rawPayload || inboundEvents[0] || null,
-    );
-
-    replyItems.forEach((reply, replyIndex) => {
-      mappedRows.push({
-        ...baseRow,
-        id: `upload-${uploadId}-${numberId || row.id}-reply-${replyIndex + 1}`,
-        eventType: "inbound",
-        normalizedStatus: "inbound",
-        receivedAt:
-          reply.receivedAt || baseRow.lastReplyAt || baseRow.receivedAt,
-        requestedAt:
-          reply.receivedAt || baseRow.lastReplyAt || baseRow.requestedAt,
-        statusUpdatedAt: reply.receivedAt || baseRow.statusUpdatedAt,
-        text: reply.text,
-        customReply: reply.text,
-        lastReplyAt: reply.receivedAt || baseRow.lastReplyAt,
-        rawPayload: reply.rawPayload || {},
-        reason: "",
-      });
-    });
   });
 
   return mappedRows
@@ -4883,14 +4892,18 @@ async function listSelectedUploadReportRows(filters = {}) {
       if (
         filters.eventType &&
         filters.eventType !== "all" &&
-        row.eventType !== filters.eventType
+        !(
+          row.eventType === filters.eventType ||
+          (filters.eventType === "inbound" &&
+            (row.customReply || row.lastReplyAt))
+        )
       ) {
         return false;
       }
 
       if (filters.status && filters.status !== "all") {
         if (filters.status === "inbound") {
-          if (row.eventType !== "inbound") return false;
+          if (!(row.customReply || row.lastReplyAt)) return false;
         } else if (
           row.normalizedStatus !== filters.status &&
           row.numberDeliveryStatus !== filters.status &&
@@ -4919,10 +4932,7 @@ async function listSelectedUploadReportRows(filters = {}) {
 async function getCustomReportRows(filters = {}) {
   const rows = filters.uploadId
     ? await listSelectedUploadReportRows(filters)
-    : [
-        ...(await listCustomReportRowsFromMongo(filters)),
-        ...(await listSenderReportRowsForCustomReport(filters)),
-      ];
+    : await listSenderReportRowsForCustomReport(filters);
   return rows.map((row) => ({
     ...row,
     rawPayload: parseJsonField(row.rawPayload, {}),
@@ -4988,7 +4998,6 @@ function getRowFieldValue(row, candidates = []) {
 
 function getCustomerNameForReport(row) {
   return (
-    row.customerName ||
     getRowFieldValue(row, [
       "Customer Name",
       "Client Name",
@@ -4996,6 +5005,7 @@ function getCustomerNameForReport(row) {
       "Customer",
       "Client",
     ]) ||
+    row.customerName ||
     ""
   );
 }
@@ -5061,10 +5071,58 @@ function getReceivedDeliveryStatusForReport(row) {
   return "";
 }
 
+function formatDateTimeForReport(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return `${date.toLocaleString("en-IN", { timeZone: "Asia/Calcutta" })} IST`;
+}
+
+function getReportReplyTime(row) {
+  if (row.lastReplyAt) return formatDateTimeForReport(row.lastReplyAt);
+  const history = parseJsonField(row.replyHistory, []);
+  if (Array.isArray(history)) {
+    const latest = history
+      .map((reply) => reply.receivedAt || reply.lastReplyAt || reply.updatedAt)
+      .filter(Boolean)
+      .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0];
+    if (latest) return formatDateTimeForReport(latest);
+  }
+  return "";
+}
+
+function getDeliveryStatusLinesForReport(row) {
+  const sentStatus = String(getSentDeliveryStatusForReport(row) || "").toLowerCase();
+  const sentAt = formatDateTimeForReport(
+    row.requestedAt || row.sentAt || row.receivedAt || row.statusUpdatedAt,
+  );
+  const statusAt = formatDateTimeForReport(row.statusUpdatedAt || row.updatedAt || row.receivedAt);
+  const replyAt = getReportReplyTime(row);
+  const lines = [];
+
+  if (sentStatus && sentStatus !== "failed") {
+    lines.push(`Sent: ${sentAt || "-"}`);
+  }
+  if (sentStatus.includes("deliver") || sentStatus.includes("read")) {
+    lines.push(`Delivered: ${statusAt || "-"}`);
+  } else if (sentStatus.includes("fail")) {
+    lines.push(`Failed: ${statusAt || "-"}`);
+  } else if (!sentStatus && row.eventType !== "inbound") {
+    lines.push("Sent: -");
+  }
+  if (getReceivedDeliveryStatusForReport(row)) {
+    lines.push(`Customer replied: ${replyAt || "-"}`);
+  }
+
+  return lines.join("\n") || "-";
+}
+
 function getReceivedMessageForReport(row) {
+  const hasReply = row.eventType === "inbound" || row.customReply || row.lastReplyAt;
+  if (!hasReply) return "";
   return (
     row.customReply ||
-    row.text ||
+    (row.eventType === "inbound" ? row.text : "") ||
     extractWebhookMessageText(row.rawPayload || row) ||
     row.content ||
     row.caption ||
@@ -5077,20 +5135,20 @@ function getReceivedMessageForReport(row) {
 function formatSingleRowForExcel(row, index) {
   return {
     "S.No.": index + 1,
-    "Date & Time": row.receivedAt || row.statusUpdatedAt || row.requestedAt || "",
+    "Date & Time": formatDateTimeForReport(row.receivedAt || row.statusUpdatedAt || row.requestedAt),
     "Customer Name": getCustomerNameForReport(row),
     "Customer Mobile": row.normalizedMobile || row.customerNumber || "",
     "Sent From": row.integratedNumber || row.integrated_number || "",
-    "Delivery Status": `Sent: ${getSentDeliveryStatusForReport(row) || "-"}\nReceived: ${getReceivedDeliveryStatusForReport(row) || "-"}`,
+    "Delivery Status": getDeliveryStatusLinesForReport(row),
     Message:
       `Sent: ${getSentMessageForReport(row) || "-"}\nReceived: ${getReceivedMessageForReport(row) || "-"}`,
-    Type: row.eventType || "",
+    Type: row.eventType === "inbound" ? "Reply event" : "Sent record",
     Status: row.normalizedStatus || "",
     "Message Status": row.numberCurrentStatus || "",
     "Technical Delivery Status": row.numberDeliveryStatus || "",
     Upload: row.uploadFileName || "",
     "Customer Reply": row.customReply || "",
-    "Reply Time": row.lastReplyAt || "",
+    "Reply Time": getReportReplyTime(row),
     "Request ID":
       row.requestId || row.oneApiRequestId || row.replyMsgId || row.uuid || "",
     "Template Name": getTemplateLabelForReport(row),
@@ -5821,7 +5879,7 @@ app.on("second-instance", () => {
   showMainWindow();
 });
 
-// Daily cache cleaner — clears Electron session cache at midnight IST every day
+// Daily cache cleaner. Clears Electron session cache at midnight IST every day.
 // so stale data from yesterday's uploads doesn't persist in the renderer.
 async function clearYesterdayUploadsCache() {
   try {
@@ -5870,7 +5928,7 @@ app.whenReady().then(async () => {
     try {
       scheduleConfig = loadScheduleConfig();
       if (!scheduleConfig) {
-        // Default schedule config on first install — disabled until user explicitly enables it
+        // Default schedule config on first install. Disabled until user explicitly enables it.
         scheduleConfig = {
           enabled: false,
           time: "10:00",
