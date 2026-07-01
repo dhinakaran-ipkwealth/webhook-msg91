@@ -1607,7 +1607,7 @@ function renderDeliveryRows(rows = lastReportRows) {
 
   if (!visibleRows.length) {
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td colspan="7" class="small-note">${rows.length ? "No delivery report rows match this phone search." : "No delivery report rows found for this selected upload yet."}</td>`;
+    tr.innerHTML = `<td colspan="8" class="small-note">${rows.length ? "No delivery report rows match this phone search." : "No delivery report rows found for this selected upload yet."}</td>`;
     reportTableBody.appendChild(tr);
   }
 
@@ -1638,6 +1638,7 @@ function renderDeliveryRows(rows = lastReportRows) {
     tr.innerHTML = `
       <td>${displayIndex + 1}</td>
       <td>${reportMobileHtml}</td>
+      <td>${escapeHtml(getTemplateLabelForReport(row) || "-")}</td>
       <td><div class="raw-cell">${escapeHtml(row.sentMessage || "-")}</div></td>
       <td>${deliveryHtml}</td>
       <td><div class="raw-cell ${formatReplyHistory(row) !== "-" ? "reply-cell-highlight" : ""}">${formatReplyHistoryHtml(row)}</div></td>
@@ -1671,8 +1672,9 @@ function updateDeliveryContextSummary(uploadId) {
       : "No upload selected.";
     return;
   }
-  const sender = upload.senderLabel || upload.senderNumber || "-";
-  const template = upload.templateLabel || upload.templateName || "-";
+  const sender = upload.senderLabel || upload.senderNumber || upload.senderId || "-";
+  const template =
+    upload.templateLabel || upload.templateName || upload.templateId || "-";
   deliveryContextSummary.textContent = `Selected upload #${upload.id}: ${upload.fileName} | Sender: ${sender} | Template: ${template} | Range: Today by default`;
 }
 
@@ -2026,6 +2028,18 @@ function getCustomerName(row) {
       "Client",
     ]) ||
     "-"
+  );
+}
+
+function getTemplateLabelForReport(row) {
+  return (
+    row.templateName ||
+    row.uploadTemplateLabel ||
+    row.templateLabel ||
+    row.campaignName ||
+    row.templateId ||
+    (row.upload && row.upload.templateName) ||
+    "No Template"
   );
 }
 

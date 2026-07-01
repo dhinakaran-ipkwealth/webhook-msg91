@@ -4016,7 +4016,99 @@ function htmlEscapeForPdf(value) {
     .replace(/\r?\n/g, "<br>");
 }
 
+function getLogoDataUri() {
+  try {
+    const logoPath = path.join(__dirname, "assets", "webhook_msg91_512.png");
+    const imageData = fs.readFileSync(logoPath);
+    return `data:image/png;base64,${imageData.toString("base64")}`;
+  } catch (err) {
+    return null;
+  }
+}
+
+function getPdfSummaryHtml(rows, options = {}) {
+  const totalRows = rows.length;
+  const uniqueCustomers = new Set(
+    rows
+      .map((row) =>
+        String(
+          row.normalizedMobile ||
+            row.mobile ||
+            row.customerNumber ||
+            row.to ||
+            row.phone ||
+            "",
+        )
+          .trim()
+          .replace(/^\+/, ""),
+      )
+      .filter(Boolean),
+  ).size;
+
+  const replyCount = rows.filter(
+    (row) =>
+      row.eventType === "inbound" || row.customReply || row.lastReplyAt,
+  ).length;
+
+  const deliveredCount = rows.filter((row) => {
+    const status = String(
+      row.deliveryStatus || row.numberDeliveryStatus || row.normalizedStatus || "",
+    ).toLowerCase();
+    return (
+      status.includes("deliver") ||
+      status.includes("read") ||
+      status.includes("success")
+    );
+  }).length;
+
+  const failedCount = rows.filter((row) => {
+    const status = String(
+      row.deliveryStatus || row.numberDeliveryStatus || row.normalizedStatus || "",
+    ).toLowerCase();
+    return (
+      status.includes("fail") ||
+      status.includes("deny") ||
+      status.includes("rejected") ||
+      status.includes("undelivered") ||
+      status.includes("error")
+    );
+  }).length;
+
+  const awaitingCount = rows.filter((row) => {
+    if (row.eventType === "inbound") return false;
+    const status = String(
+      row.deliveryStatus || row.numberDeliveryStatus || row.normalizedStatus || "",
+    ).toLowerCase();
+    return (
+      !status ||
+      status === "sent" ||
+      status === "pending" ||
+      status.includes("submit") ||
+      status.includes("queued")
+    );
+  }).length;
+
+  const summaryRows = [
+    ["Report type", options.reportType || "MSG91 Webhook Report"],
+    ["Date range", options.dateRange || "Webhook event range"],
+    ["Total event rows", String(totalRows)],
+    ["Unique customers", String(uniqueCustomers)],
+    ["Delivered / Read", String(deliveredCount)],
+    ["Customer replies", String(replyCount)],
+    ["Awaiting delivery update", String(awaitingCount)],
+    ["Failed / Technical issues", String(failedCount)],
+  ];
+
+  return `<table class="summary-table"><tbody>${summaryRows
+    .map(
+      ([label, value]) =>
+        `<tr><th>${htmlEscapeForPdf(label)}</th><td>${htmlEscapeForPdf(value)}</td></tr>`,
+    )
+    .join("")}</tbody></table>`;
+}
+
 function buildPdfHtmlDocument(title, summaryHtml, rowsHtml) {
+  const logoData = getLogoDataUri();
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -4024,18 +4116,33 @@ function buildPdfHtmlDocument(title, summaryHtml, rowsHtml) {
 <title>${htmlEscapeForPdf(title)}</title>
 <style>
   body { font-family: Arial, sans-serif; margin: 24px; color: #222; }
+  .header { display: flex; align-items: center; margin-bottom: 24px; }
+  .logo { width: 80px; height: auto; margin-right: 16px; }
+  .header-text { display: flex; flex-direction: column; }
+  .company-name { margin: 0; font-size: 28px; letter-spacing: 0.04em; color: #0c3d91; }
+  .company-tagline { margin: 2px 0 0; font-size: 14px; color: #555; }
   h1, h2 { margin: 0 0 12px 0; font-weight: 600; }
   h1 { font-size: 24px; }
   h2 { font-size: 20px; margin-top: 32px; }
   .summary-table, .row-table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
-  .summary-table td, .row-table td { border: 1px solid #ccc; padding: 6px 8px; vertical-align: top; }
-  .summary-table td:first-child, .row-table td:first-child { width: 25%; font-weight: 600; background: #fafafa; }
-  .row-block { page-break-inside: avoid; margin-bottom: 28px; }
-  .row-block h3 { margin: 0 0 12px 0; font-size: 18px; }
-  .footer { margin-top: 20px; font-size: 12px; color: #555; }
+  .summary-table th, .summary-table td, .row-table th, .row-table td { border: 1px solid #ccc; padding: 8px 10px; vertical-align: top; }
+  .summary-table th { background: #f1f5fb; text-align: left; font-weight: 700; width: 30%; }
+  .summary-table td { background: #fff; }
+  .row-table th { background: #f7f9fc; text-align: left; font-weight: 700; }
+  .row-table td { background: #fff; }
+  .row-table thead th { background: #0c3d91; color: #fff; }
+  .footer { margin-top: 16px; font-size: 12px; color: #555; }
+  .section-title { margin: 30px 0 12px; font-size: 18px; color: #0c3d91; }
 </style>
 </head>
 <body>
+  <div class="header">
+    ${logoData ? `<img class="logo" src="${logoData}" alt="IPK Wealth Logo" />` : ""}
+    <div class="header-text">
+      <p class="company-name">IPK Wealth</p>
+      <p class="company-tagline">Making Wealth For Generations</p>
+    </div>
+  </div>
   <h1>${htmlEscapeForPdf(title)}</h1>
   ${summaryHtml}
   ${rowsHtml}
@@ -4044,15 +4151,23 @@ function buildPdfHtmlDocument(title, summaryHtml, rowsHtml) {
 </html>`;
 }
 
-function toPdfRowHtml(row, index) {
-  const formatted = formatSingleRowForExcel(row, index);
-  const rowCells = Object.entries(formatted)
+function getPdfRowsTableHtml(rows) {
+  if (!rows || !rows.length) return "";
+  const headers = Object.keys(rows[0]);
+  const headerHtml = `<thead><tr>${headers
+    .map((header) => `<th>${htmlEscapeForPdf(header)}</th>`)
+    .join("")}</tr></thead>`;
+  const bodyHtml = rows
     .map(
-      ([key, value]) =>
-        `<tr><td>${htmlEscapeForPdf(key)}</td><td>${htmlEscapeForPdf(value)}</td></tr>`,
+      (row) =>
+        `<tr>${headers
+          .map((header) =>
+            `<td>${htmlEscapeForPdf(String(row[header] ?? ""))}</td>`,
+          )
+          .join("")}</tr>`,
     )
     .join("");
-  return `<div class="row-block"><h3>Row ${index + 1}</h3><table class="row-table">${rowCells}</table></div>`;
+  return `<h2>Full Report Data</h2><table class="row-table">${headerHtml}<tbody>${bodyHtml}</tbody></table>`;
 }
 
 async function renderPdfDocument(html, filenamePrefix, rowCount) {
@@ -4084,19 +4199,56 @@ async function renderPdfDocument(html, filenamePrefix, rowCount) {
 }
 
 function generatePdfFromRows(rows, filenamePrefix, isMultiSection = false) {
-  const summaryRows = [
-    ["Total rows", rows.length],
-    ["Export type", isMultiSection ? "Grouped webhook report" : "Selected upload report"],
-  ];
-  const summaryHtml = `<table class="summary-table">${summaryRows
-    .map(
-      ([label, value]) =>
-        `<tr><td>${htmlEscapeForPdf(label)}</td><td>${htmlEscapeForPdf(value)}</td></tr>`,
-    )
-    .join("")}</table>`;
-  const rowsHtml = rows
-    .map((row, index) => toPdfRowHtml(row, index))
-    .join("");
+  const summaryHtml = getPdfSummaryHtml(rows, {
+    reportType: isMultiSection ? "Grouped webhook report" : "MSG91 Webhook Report",
+    dateRange: isMultiSection ? "Webhook event date range" : "Webhook event range",
+  });
+  const rowsHtml = getPdfRowsTableHtml(
+    rows.map((row) => ({
+      "Date / Time": getDateTimeForReport(row),
+      "Customer Name": getCustomerNameForReport(row),
+      "Customer Mobile":
+        row.normalizedMobile ||
+        row.cleaned ||
+        row.mobile ||
+        row.customerNumber ||
+        row.to ||
+        row.phone ||
+        row.rawPayload?.customerNumber ||
+        row.rawPayload?.mobile ||
+        "",
+      "Sender Mobile":
+        row.integratedNumber ||
+        row.integrated_number ||
+        row.senderNumber ||
+        row.sender_number ||
+        row.upload?.senderNumber ||
+        row.upload?.sender_number ||
+        row.rawPayload?.integratedNumber ||
+        row.rawPayload?.integrated_number ||
+        "",
+      "Template Name": getTemplateLabelForReport(row) ||
+        row.rawPayload?.templateName ||
+        row.rawPayload?.template_name ||
+        row.rawPayload?.campaignName ||
+        row.rawPayload?.campaign_name ||
+        "",
+      "Sent Message": row.sentMessage || getSentMessageForReport(row),
+      "Delivery Status": getDeliveryStatusLinesForReport(row),
+      "Customer Reply": getReceivedMessageForReport(row),
+      "Reply Time": getReportReplyTime(row),
+      "Request ID":
+        row.requestId ||
+        row.oneApiRequestId ||
+        row.replyMsgId ||
+        row.uuid ||
+        row.rawPayload?.requestId ||
+        row.rawPayload?.request_id ||
+        "",
+      "Event Type": row.eventType || row.rawPayload?.eventType || row.rawPayload?.event_type || "",
+      "Status": row.normalizedStatus || row.deliveryStatus || row.numberDeliveryStatus || row.rawPayload?.status || "",
+    })),
+  );
   const html = buildPdfHtmlDocument("MSG91 Webhook Report", summaryHtml, rowsHtml);
   return renderPdfDocument(html, filenamePrefix, rows.length);
 }
@@ -4107,13 +4259,24 @@ async function exportUploadReport(uploadId) {
     throw new Error("Upload not found.");
   }
 
+  const uploadMeta = {
+    uploadFileName: upload.fileName || "",
+    uploadId: upload.id || uploadId,
+    senderId: upload.senderId || "",
+    senderNumber: upload.senderNumber || upload.senderId || "",
+    templateId: upload.templateId || "",
+    templateName: upload.templateName || "",
+    templateLabel: upload.templateLabel || upload.templateName || "",
+    uploadTemplateLabel: upload.templateLabel || upload.templateName || "",
+  };
+
   const rows = await listNumbersByUpload(uploadId);
   if (!rows.length) {
     throw new Error("No rows found for this upload.");
   }
 
   return generatePdfFromRows(
-    rows.map((row, index) => ({ ...row, _exportIndex: index })),
+    rows.map((row, index) => ({ ...uploadMeta, ...row, _exportIndex: index })),
     `msg91-report-${upload.id}-${safeFilePart(upload.fileName)}`,
     false,
   );
@@ -4488,6 +4651,20 @@ ipcMain.handle("fetch-report", async (event, uploadId) => {
   // and whatsapp_webhook_events so delayed replies appear in the Delivery Report.
   if (!uploadId) return [];
 
+  const upload = await getUploadById(uploadId);
+  const uploadMeta = upload
+    ? {
+        uploadFileName: upload.fileName || "",
+        uploadId: upload.id || uploadId,
+        senderId: upload.senderId || "",
+        senderNumber: upload.senderNumber || upload.senderId || "",
+        templateId: upload.templateId || "",
+        templateName: upload.templateName || "",
+        templateLabel: upload.templateLabel || upload.templateName || "",
+        uploadTemplateLabel: upload.templateLabel || upload.templateName || "",
+      }
+    : {};
+
   const rows = await listNumbersByUpload(uploadId, { desc: true });
   const senderReportMap = await getSenderReportMapForUpload(uploadId);
   const inboundReplyMap = await getInboundReplyMapForUpload(uploadId);
@@ -4505,6 +4682,7 @@ ipcMain.handle("fetch-report", async (event, uploadId) => {
     const mergedReply = mergeReportReplyFields(row, senderReport, inboundEvents);
 
     return {
+      ...uploadMeta,
       ...row,
       id: row.id || row.numberId,
       numberId: row.numberId || row.id,
@@ -5053,10 +5231,60 @@ function getCustomerNameForReport(row) {
       "Name",
       "Customer",
       "Client",
+      "Contact Name",
+      "Full Name",
+      "CustomerName",
+      "clientName",
+      "customer_name",
+      "client_name",
+      "fullname",
+      "contact_name",
     ]) ||
     row.customerName ||
+    row.customer_name ||
+    row.clientName ||
+    row.client_name ||
+    row.name ||
+    row.customer ||
+    row.client ||
+    row.fullName ||
+    row.full_name ||
+    row.contactName ||
+    row.contact_name ||
+    row.rawPayload?.customerName ||
+    row.rawPayload?.customer_name ||
+    row.rawPayload?.name ||
     ""
   );
+}
+
+function getDateTimeForReport(row) {
+  const candidates = [
+    row.createdAt,
+    row.updatedAt,
+    row.statusUpdatedAt,
+    row.sentAt,
+    row.sent_at,
+    row.timestamp,
+    row.time,
+    row.dateTime,
+    row.date_time,
+    row.eventTime,
+    row.event_time,
+    row.rawPayload?.timestamp,
+    row.rawPayload?.createdAt,
+    row.rawPayload?.statusUpdatedAt,
+  ];
+  for (const value of candidates) {
+    if (!value) continue;
+    const date = new Date(value);
+    if (!Number.isNaN(date.getTime())) {
+      return date.toLocaleString();
+    }
+    const text = String(value).trim();
+    if (text) return text;
+  }
+  return "";
 }
 
 function getSentMessageForReport(row) {
@@ -5076,6 +5304,8 @@ function getTemplateLabelForReport(row) {
   return (
     row.templateName ||
     row.uploadTemplateLabel ||
+    row.upload?.templateName ||
+    row.upload?.templateLabel ||
     row.templateLabel ||
     row.campaignName ||
     "No Template"

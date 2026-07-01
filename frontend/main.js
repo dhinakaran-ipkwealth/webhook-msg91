@@ -4011,63 +4011,258 @@ async function exportUploadReport(uploadId) {
     throw new Error("Upload not found.");
   }
 
+  const uploadMeta = {
+    uploadFileName: upload.fileName || "",
+    uploadId: upload.id || uploadId,
+    senderId: upload.senderId || "",
+    senderNumber: upload.senderNumber || upload.senderId || "",
+    templateId: upload.templateId || "",
+    templateName: upload.templateName || "",
+    templateLabel: upload.templateLabel || upload.templateName || "",
+    uploadTemplateLabel: upload.templateLabel || upload.templateName || "",
+  };
+
   const rows = await listNumbersByUpload(uploadId);
-  const reportRows = rows.map((row, index) => {
-    const rowData = parseRowData(row);
-    return {
-      "#": index + 1,
-      "File Name": upload.fileName,
-      Template: upload.templateLabel || upload.templateName || "",
-      "Sender Number": upload.senderId || "",
-      "Original Phone": row.original || "",
-      "Validated Phone": row.cleaned || "",
-      "Phone Valid": row.valid ? "Yes" : "No",
-      "Current Status": row.currentStatus || "",
-      "Delivery Status": row.deliveryStatus || "",
-      "Sent Message": row.sentMessage || "",
-      "Customer Reply": row.customReply || "",
-      "Reply History": row.replyHistory || "",
-      "Reply Time": row.lastReplyAt || "",
-      "Retry Count": row.retryCount || 0,
-      "Response ID": row.responseId || "",
-      "Message ID": row.messageId || "",
-      "Response Details": row.responseDetails || "",
-      "Last Updated": row.lastUpdated || "",
-      "MSG91 Response": upload.apiResponse || "",
-      ...rowData,
-    };
+  if (!rows.length) {
+    throw new Error("No rows found for this upload.");
+  }
+
+  return generatePdfFromRows(
+    rows.map((row) => ({ ...uploadMeta, ...row })),
+    "msg91-upload-report",
+  );
+}
+
+function htmlEscapeForPdf(value) {
+  const text = String(value ?? "");
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;")
+    .replace(/\r?\n/g, "<br>");
+}
+
+function getLogoDataUri() {
+  try {
+    const logoPath = path.join(__dirname, "assets", "webhook_msg91_512.png");
+    const imageData = fs.readFileSync(logoPath);
+    return `data:image/png;base64,${imageData.toString("base64")}`;
+  } catch (err) {
+    return null;
+  }
+}
+
+function getPdfSummaryHtml(rows, options = {}) {
+  const totalRows = Array.isArray(rows) ? rows.length : 0;
+  const uniqueCustomers = new Set(
+    rows
+      .map((row) =>
+        String(
+          row.normalizedMobile || row.cleaned || row.mobile || row.customerNumber || "",
+        ).trim(),
+      )
+      .filter(Boolean),
+  ).size;
+  const deliveredCount = rows.filter((row) => {
+    const status = String(
+      row.deliveryStatus || row.currentStatus || row.numberDeliveryStatus || "",
+    ).toLowerCase();
+    return status.includes("delivered") || status.includes("read") || status.includes("success");
+  }).length;
+  const replyCount = rows.filter(
+    (row) => (row.customReply || row.lastReplyAt || row.eventType === "inbound") && String(row.customReply || row.lastReplyAt || row.eventType === "inbound").trim(),
+  ).length;
+  const awaitingCount = rows.filter((row) => {
+    const status = String(
+      row.deliveryStatus || row.currentStatus || row.numberDeliveryStatus || "",
+    ).toLowerCase();
+    return !status || status === "pending" || status === "reporting" || status.includes("submit");
+  }).length;
+  const failedCount = rows.filter((row) => {
+    const status = String(
+      row.deliveryStatus || row.currentStatus || row.numberDeliveryStatus || "",
+    ).toLowerCase();
+    return status.includes("failed") || status.includes("undelivered") || status === "invalid";
+  }).length;
+
+  const summaryRows = [
+    ["Report type", options.reportType || "MSG91 Webhook Report"],
+    ["Date range", options.dateRange || "Webhook event range"],
+    ["Total event rows", String(totalRows)],
+    ["Unique customers", String(uniqueCustomers)],
+    ["Delivered / Read", String(deliveredCount)],
+    ["Customer replies", String(replyCount)],
+    ["Awaiting delivery update", String(awaitingCount)],
+    ["Failed / Technical issues", String(failedCount)],
+  ];
+
+  return `<table class="summary-table"><tbody>${summaryRows
+    .map(
+      ([label, value]) =>
+        `<tr><th>${htmlEscapeForPdf(label)}</th><td>${htmlEscapeForPdf(value)}</td></tr>`,
+    )
+    .join("")}</tbody></table>`;
+}
+
+function buildPdfHtmlDocument(title, summaryHtml, rowsHtml) {
+  const logoData = getLogoDataUri();
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>${htmlEscapeForPdf(title)}</title>
+<style>
+  body { font-family: Arial, sans-serif; margin: 24px; color: #222; }
+  .header { display: flex; align-items: center; margin-bottom: 24px; }
+  .logo { width: 80px; height: auto; margin-right: 16px; }
+  .header-text { display: flex; flex-direction: column; }
+  .company-name { margin: 0; font-size: 28px; letter-spacing: 0.04em; color: #0c3d91; }
+  .company-tagline { margin: 2px 0 0; font-size: 14px; color: #555; }
+  h1, h2 { margin: 0 0 12px 0; font-weight: 600; }
+  h1 { font-size: 24px; }
+  h2 { font-size: 20px; margin-top: 32px; }
+  .summary-table, .row-table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
+  .summary-table th, .summary-table td, .row-table th, .row-table td { border: 1px solid #ccc; padding: 8px 10px; vertical-align: top; }
+  .summary-table th { background: #f1f5fb; text-align: left; font-weight: 700; width: 30%; }
+  .summary-table td { background: #fff; }
+  .row-table th { background: #f7f9fc; text-align: left; font-weight: 700; }
+  .row-table td { background: #fff; }
+  .row-table thead th { background: #0c3d91; color: #fff; }
+  .footer { margin-top: 16px; font-size: 12px; color: #555; }
+</style>
+</head>
+<body>
+  <div class="header">
+    ${logoData ? `<img class="logo" src="${logoData}" alt="IPK Wealth Logo" />` : ""}
+    <div class="header-text">
+      <p class="company-name">IPK Wealth</p>
+      <p class="company-tagline">Making Wealth For Generations</p>
+    </div>
+  </div>
+  <h1>${htmlEscapeForPdf(title)}</h1>
+  ${summaryHtml}
+  ${rowsHtml}
+  <div class="footer">Generated at ${htmlEscapeForPdf(new Date().toLocaleString())}</div>
+</body>
+</html>`;
+}
+
+function getPdfRowsTableHtml(rows) {
+  if (!rows || !rows.length) return "";
+  const headers = Object.keys(rows[0]);
+  const headerHtml = `<thead><tr>${headers
+    .map((header) => `<th>${htmlEscapeForPdf(header)}</th>`)
+    .join("")}</tr></thead>`;
+  const bodyHtml = rows
+    .map(
+      (row) =>
+        `<tr>${headers
+          .map((header) =>
+            `<td>${htmlEscapeForPdf(String(row[header] ?? ""))}</td>`,
+          )
+          .join("")}</tr>`,
+    )
+    .join("");
+  return `<h2>Delivery Report</h2><table class="row-table">${headerHtml}<tbody>${bodyHtml}</tbody></table>`;
+}
+
+async function renderPdfDocument(html, filenamePrefix, rowCount) {
+  const pdfWindow = new BrowserWindow({
+    show: false,
+    width: 1200,
+    height: 900,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+    },
   });
 
-  const workbook = XLSX.utils.book_new();
-  const summaryRows = [
-    ["Upload ID", upload.id],
-    ["File Name", upload.fileName],
-    ["Template", upload.templateLabel || upload.templateName || ""],
-    ["Sender Number", upload.senderId || ""],
-    ["Total Records", upload.totalRecords || rows.length],
-    ["Valid", rows.filter((row) => row.valid).length],
-    ["Invalid", rows.filter((row) => !row.valid).length],
-    ["Status", upload.status || ""],
-    ["Exported At", new Date().toISOString()],
-  ];
-  XLSX.utils.book_append_sheet(
-    workbook,
-    XLSX.utils.aoa_to_sheet(summaryRows),
-    "Summary",
-  );
-  XLSX.utils.book_append_sheet(
-    workbook,
-    XLSX.utils.json_to_sheet(reportRows),
-    "Delivery Report",
-  );
+  await pdfWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+  const pdfData = await pdfWindow.webContents.printToPDF({
+    printBackground: true,
+    marginsType: 1,
+    pageSize: "A4",
+  });
 
   const exportDir = app.getPath("downloads");
   const filePath = path.join(
     exportDir,
-    `msg91-report-${upload.id}-${safeFilePart(upload.fileName)}-${new Date().toISOString().slice(0, 10)}.xlsx`,
+    `${filenamePrefix}-${new Date().toISOString().slice(0, 10)}.pdf`,
   );
-  XLSX.writeFile(workbook, filePath);
-  return { filePath, rowCount: reportRows.length };
+  fs.writeFileSync(filePath, pdfData);
+  pdfWindow.close();
+  return { filePath, rowCount };
+}
+
+function generatePdfFromRows(rows, filenamePrefix, isMultiSection = false) {
+  const summaryHtml = getPdfSummaryHtml(rows, {
+    reportType: isMultiSection ? "Grouped webhook report" : "MSG91 Webhook Report",
+    dateRange: isMultiSection ? "Webhook event date range" : "Webhook event range",
+  });
+  const rowsHtml = getPdfRowsTableHtml(
+    rows.map((row) => ({
+      "Date / Time": getDateTimeForReport(row),
+      "Customer Name": getCustomerNameForReport(row),
+      "Customer Mobile":
+        row.normalizedMobile ||
+        row.cleaned ||
+        row.mobile ||
+        row.customerNumber ||
+        row.to ||
+        row.phone ||
+        row.rawPayload?.customerNumber ||
+        row.rawPayload?.mobile ||
+        "",
+      "Sender Mobile":
+        row.senderNumber ||
+        row.sender_number ||
+        row.integratedNumber ||
+        row.integrated_number ||
+        row.senderId ||
+        row.sender_id ||
+        row.upload?.senderNumber ||
+        row.upload?.sender_number ||
+        row.rawPayload?.integratedNumber ||
+        row.rawPayload?.integrated_number ||
+        "",
+      "Template Name":
+        getTemplateLabelForReport(row) ||
+        row.templateName ||
+        row.template_name ||
+        row.templateLabel ||
+        row.template_label ||
+        row.templateId ||
+        row.template_id ||
+        row.upload?.templateName ||
+        row.upload?.template_label ||
+        row.upload?.templateLabel ||
+        row.upload?.templateName ||
+        row.upload?.templateId ||
+        row.rawPayload?.templateName ||
+        row.rawPayload?.template_name ||
+        row.rawPayload?.campaignName ||
+        row.rawPayload?.campaign_name ||
+        "",
+      "Sent Message": row.sentMessage || getSentMessageForReport(row),
+      "Delivery Status": getDeliveryStatusLinesForReport(row),
+      "Customer Reply": getReceivedMessageForReport(row),
+      "Reply Time": getReportReplyTime(row),
+      "Request ID":
+        row.requestId ||
+        row.oneApiRequestId ||
+        row.replyMsgId ||
+        row.uuid ||
+        row.rawPayload?.requestId ||
+        row.rawPayload?.request_id ||
+        "",
+      "Event Type": row.eventType || row.rawPayload?.eventType || row.rawPayload?.event_type || "",
+      Status: row.normalizedStatus || row.deliveryStatus || row.numberDeliveryStatus || row.rawPayload?.status || "",
+    })),
+  );
+  const html = buildPdfHtmlDocument("MSG91 Webhook Report", summaryHtml, rowsHtml);
+  return renderPdfDocument(html, filenamePrefix, rows.length);
 }
 
 function sendStateUpdate(payload = {}) {
@@ -4439,6 +4634,20 @@ ipcMain.handle("fetch-report", async (event, uploadId) => {
   // and whatsapp_webhook_events so delayed replies appear in the Delivery Report.
   if (!uploadId) return [];
 
+  const upload = await getUploadById(uploadId);
+  const uploadMeta = upload
+    ? {
+        uploadFileName: upload.fileName || "",
+        uploadId: upload.id || uploadId,
+        senderId: upload.senderId || "",
+        senderNumber: upload.senderNumber || upload.senderId || "",
+        templateId: upload.templateId || "",
+        templateName: upload.templateName || "",
+        templateLabel: upload.templateLabel || upload.templateName || "",
+        uploadTemplateLabel: upload.templateLabel || upload.templateName || "",
+      }
+    : {};
+
   const rows = await listNumbersByUpload(uploadId, { desc: true });
   const senderReportMap = await getSenderReportMapForUpload(uploadId);
   const inboundReplyMap = await getInboundReplyMapForUpload(uploadId);
@@ -4456,6 +4665,7 @@ ipcMain.handle("fetch-report", async (event, uploadId) => {
     const mergedReply = mergeReportReplyFields(row, senderReport, inboundEvents);
 
     return {
+      ...uploadMeta,
       ...row,
       id: row.id || row.numberId,
       numberId: row.numberId || row.id,
@@ -5004,10 +5214,60 @@ function getCustomerNameForReport(row) {
       "Name",
       "Customer",
       "Client",
+      "Contact Name",
+      "Full Name",
+      "CustomerName",
+      "clientName",
+      "customer_name",
+      "client_name",
+      "fullname",
+      "contact_name",
     ]) ||
     row.customerName ||
+    row.customer_name ||
+    row.clientName ||
+    row.client_name ||
+    row.name ||
+    row.customer ||
+    row.client ||
+    row.fullName ||
+    row.full_name ||
+    row.contactName ||
+    row.contact_name ||
+    row.rawPayload?.customerName ||
+    row.rawPayload?.customer_name ||
+    row.rawPayload?.name ||
     ""
   );
+}
+
+function getDateTimeForReport(row) {
+  const candidates = [
+    row.createdAt,
+    row.updatedAt,
+    row.statusUpdatedAt,
+    row.sentAt,
+    row.sent_at,
+    row.timestamp,
+    row.time,
+    row.dateTime,
+    row.date_time,
+    row.eventTime,
+    row.event_time,
+    row.rawPayload?.timestamp,
+    row.rawPayload?.createdAt,
+    row.rawPayload?.statusUpdatedAt,
+  ];
+  for (const value of candidates) {
+    if (!value) continue;
+    const date = new Date(value);
+    if (!Number.isNaN(date.getTime())) {
+      return date.toLocaleString();
+    }
+    const text = String(value).trim();
+    if (text) return text;
+  }
+  return "";
 }
 
 function getSentMessageForReport(row) {
@@ -5027,6 +5287,8 @@ function getTemplateLabelForReport(row) {
   return (
     row.templateName ||
     row.uploadTemplateLabel ||
+    row.upload?.templateName ||
+    row.upload?.templateLabel ||
     row.templateLabel ||
     row.campaignName ||
     "No Template"
