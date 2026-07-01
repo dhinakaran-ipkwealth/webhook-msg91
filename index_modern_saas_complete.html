@@ -638,11 +638,14 @@
             <div class="field-row">
               <input id="deliveryPhoneSearch" type="text" placeholder="Search delivery phone" />
               <button id="deliveryReportRefreshButton" class="secondary-button">
-                <span id="deliveryReportRefreshIcon">Refresh</span>
+                <!-- <span id="deliveryReportRefreshIcon">Refresh</span> -->
                 <span id="deliveryReportRefreshLabel">Refresh Report</span>
               </button>
-            </div>
-            <div class="delivery-note">Replies are read from `whatsapp_sender_reports`, `whatsapp_numbers`, and `whatsapp_webhook_events` written by the EC2 PM2 webhook service.</div>
+            </div>            <div class="field-row">
+              <button id="deliveryReportExport" class="secondary-button">Export PDF</button>
+              <button id="deliveryReportEmailAdmin" class="secondary-button">Email Admin Report</button>
+              <button id="deliveryReportEmailRMs" class="secondary-button">Email RM Reports</button>
+            </div>            <div class="delivery-note">Replies are read from `whatsapp_sender_reports`, `whatsapp_numbers`, and `whatsapp_webhook_events` written by the EC2 PM2 webhook service.</div>
             <div class="table-wrap">
               <table>
                 <thead><tr><th>#</th><th>Mobile</th><th>Sent Message</th><th>Delivery</th><th>Customer Reply</th><th>Reply Time</th><th>Request ID</th></tr></thead>
@@ -668,7 +671,7 @@
               <select id="customStatus"><option value="all">All statuses</option><option value="sent">Sent</option><option value="delivered">Delivered/Read</option><option value="failed">Failed</option><option value="inbound">Customer replies</option></select>
               <input id="customSearch" type="text" placeholder="Search mobile, request, reply" />
               <button id="customReportRefresh">Refresh Report</button>
-              <button id="customReportExport" class="secondary-button">Export Excel</button>
+              <button id="customReportExport" class="secondary-button">Export PDF</button>
               <button id="customReportEmailAdmin" class="secondary-button">Email Admin Report</button>
               <button id="customReportEmailRMs" class="secondary-button">Email RM Reports</button>
               <button id="customReportSchedule" class="secondary-button">Schedule</button>

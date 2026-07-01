@@ -290,7 +290,7 @@ async function sendAdminReportEmailDirect(filePath, startIso, endIso) {
       "software@ipkwealth.com",
     to: to.join(","),
     subject: `Admin Bulk Sender Webhook Report (${new Date().toLocaleDateString()})`,
-    text: `Hi Admin,\n\nPlease find attached the comprehensive Excel report containing all transaction webhook events for the range: ${rangeStr}.\n\nReport Details:\n- Range: ${rangeStr}\n- Generation Time: ${new Date().toLocaleString()}\n\nBest Regards,\nIPK Wealth Services Private Limited`,
+    text: `Hi Admin,\n\nPlease find attached the comprehensive PDF report containing all transaction webhook events for the range: ${rangeStr}.\n\nReport Details:\n- Range: ${rangeStr}\n- Generation Time: ${new Date().toLocaleString()}\n\nBest Regards,\nIPK Wealth Services Private Limited`,
     attachments: [{ filename: path.basename(filePath), path: filePath }],
   };
 
@@ -359,9 +359,9 @@ async function sendRmGroupedReportsDirect(filters = {}) {
       continue;
     }
 
-    // Generate Excel attachment for this RM
+    // Generate PDF attachment for this RM
     const filenamePrefix = `rm-report-${rmNumber}`;
-    const { filePath } = generateExcelFromRows(rmRows, filenamePrefix);
+    const { filePath } = await generatePdfFromRows(rmRows, filenamePrefix);
 
     // Send email to RM
     if (
@@ -394,7 +394,7 @@ async function sendRmGroupedReportsDirect(filters = {}) {
         "software@ipkwealth.com",
       to: rmEmail,
       subject: `Relationship Manager Webhook Report - ${rm.label}`,
-      text: `Hi ${rm.label.split("-")[1]?.trim() || "RM"},\n\nPlease find attached your grouped MSG91 transaction report representing deliveries and customer replies for your assigned sender number (${rmNumber}).\n\nReport Period: Selected Date-Time Range\nGenerated At: ${new Date().toLocaleString()}\n\nBest Regards,\nIPK Wealth Services Private Limited`,
+      text: `Hi ${rm.label.split("-")[1]?.trim() || "RM"},\n\nPlease find attached your grouped MSG91 transaction PDF report representing deliveries and customer replies for your assigned sender number (${rmNumber}).\n\nReport Period: Selected Date-Time Range\nGenerated At: ${new Date().toLocaleString()}\n\nBest Regards,\nIPK Wealth Services Private Limited`,
       attachments: [{ filename: path.basename(filePath), path: filePath }],
     };
 
@@ -4005,6 +4005,102 @@ function safeFilePart(value) {
   );
 }
 
+function htmlEscapeForPdf(value) {
+  const text = String(value ?? "");
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;")
+    .replace(/\r?\n/g, "<br>");
+}
+
+function buildPdfHtmlDocument(title, summaryHtml, rowsHtml) {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>${htmlEscapeForPdf(title)}</title>
+<style>
+  body { font-family: Arial, sans-serif; margin: 24px; color: #222; }
+  h1, h2 { margin: 0 0 12px 0; font-weight: 600; }
+  h1 { font-size: 24px; }
+  h2 { font-size: 20px; margin-top: 32px; }
+  .summary-table, .row-table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
+  .summary-table td, .row-table td { border: 1px solid #ccc; padding: 6px 8px; vertical-align: top; }
+  .summary-table td:first-child, .row-table td:first-child { width: 25%; font-weight: 600; background: #fafafa; }
+  .row-block { page-break-inside: avoid; margin-bottom: 28px; }
+  .row-block h3 { margin: 0 0 12px 0; font-size: 18px; }
+  .footer { margin-top: 20px; font-size: 12px; color: #555; }
+</style>
+</head>
+<body>
+  <h1>${htmlEscapeForPdf(title)}</h1>
+  ${summaryHtml}
+  ${rowsHtml}
+  <div class="footer">Generated at ${htmlEscapeForPdf(new Date().toLocaleString())}</div>
+</body>
+</html>`;
+}
+
+function toPdfRowHtml(row, index) {
+  const formatted = formatSingleRowForExcel(row, index);
+  const rowCells = Object.entries(formatted)
+    .map(
+      ([key, value]) =>
+        `<tr><td>${htmlEscapeForPdf(key)}</td><td>${htmlEscapeForPdf(value)}</td></tr>`,
+    )
+    .join("");
+  return `<div class="row-block"><h3>Row ${index + 1}</h3><table class="row-table">${rowCells}</table></div>`;
+}
+
+async function renderPdfDocument(html, filenamePrefix, rowCount) {
+  const pdfWindow = new BrowserWindow({
+    show: false,
+    width: 1200,
+    height: 900,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+    },
+  });
+
+  await pdfWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+  const pdfData = await pdfWindow.webContents.printToPDF({
+    printBackground: true,
+    marginsType: 1,
+    pageSize: "A4",
+  });
+
+  const exportDir = app.getPath("downloads");
+  const filePath = path.join(
+    exportDir,
+    `${filenamePrefix}-${new Date().toISOString().slice(0, 10)}.pdf`,
+  );
+  fs.writeFileSync(filePath, pdfData);
+  pdfWindow.close();
+  return { filePath, rowCount };
+}
+
+function generatePdfFromRows(rows, filenamePrefix, isMultiSection = false) {
+  const summaryRows = [
+    ["Total rows", rows.length],
+    ["Export type", isMultiSection ? "Grouped webhook report" : "Selected upload report"],
+  ];
+  const summaryHtml = `<table class="summary-table">${summaryRows
+    .map(
+      ([label, value]) =>
+        `<tr><td>${htmlEscapeForPdf(label)}</td><td>${htmlEscapeForPdf(value)}</td></tr>`,
+    )
+    .join("")}</table>`;
+  const rowsHtml = rows
+    .map((row, index) => toPdfRowHtml(row, index))
+    .join("");
+  const html = buildPdfHtmlDocument("MSG91 Webhook Report", summaryHtml, rowsHtml);
+  return renderPdfDocument(html, filenamePrefix, rows.length);
+}
+
 async function exportUploadReport(uploadId) {
   const upload = await getUploadById(uploadId);
   if (!upload) {
@@ -4012,62 +4108,15 @@ async function exportUploadReport(uploadId) {
   }
 
   const rows = await listNumbersByUpload(uploadId);
-  const reportRows = rows.map((row, index) => {
-    const rowData = parseRowData(row);
-    return {
-      "#": index + 1,
-      "File Name": upload.fileName,
-      Template: upload.templateLabel || upload.templateName || "",
-      "Sender Number": upload.senderId || "",
-      "Original Phone": row.original || "",
-      "Validated Phone": row.cleaned || "",
-      "Phone Valid": row.valid ? "Yes" : "No",
-      "Current Status": row.currentStatus || "",
-      "Delivery Status": row.deliveryStatus || "",
-      "Sent Message": row.sentMessage || "",
-      "Customer Reply": row.customReply || "",
-      "Reply History": row.replyHistory || "",
-      "Reply Time": row.lastReplyAt || "",
-      "Retry Count": row.retryCount || 0,
-      "Response ID": row.responseId || "",
-      "Message ID": row.messageId || "",
-      "Response Details": row.responseDetails || "",
-      "Last Updated": row.lastUpdated || "",
-      "MSG91 Response": upload.apiResponse || "",
-      ...rowData,
-    };
-  });
+  if (!rows.length) {
+    throw new Error("No rows found for this upload.");
+  }
 
-  const workbook = XLSX.utils.book_new();
-  const summaryRows = [
-    ["Upload ID", upload.id],
-    ["File Name", upload.fileName],
-    ["Template", upload.templateLabel || upload.templateName || ""],
-    ["Sender Number", upload.senderId || ""],
-    ["Total Records", upload.totalRecords || rows.length],
-    ["Valid", rows.filter((row) => row.valid).length],
-    ["Invalid", rows.filter((row) => !row.valid).length],
-    ["Status", upload.status || ""],
-    ["Exported At", new Date().toISOString()],
-  ];
-  XLSX.utils.book_append_sheet(
-    workbook,
-    XLSX.utils.aoa_to_sheet(summaryRows),
-    "Summary",
+  return generatePdfFromRows(
+    rows.map((row, index) => ({ ...row, _exportIndex: index })),
+    `msg91-report-${upload.id}-${safeFilePart(upload.fileName)}`,
+    false,
   );
-  XLSX.utils.book_append_sheet(
-    workbook,
-    XLSX.utils.json_to_sheet(reportRows),
-    "Delivery Report",
-  );
-
-  const exportDir = app.getPath("downloads");
-  const filePath = path.join(
-    exportDir,
-    `msg91-report-${upload.id}-${safeFilePart(upload.fileName)}-${new Date().toISOString().slice(0, 10)}.xlsx`,
-  );
-  XLSX.writeFile(workbook, filePath);
-  return { filePath, rowCount: reportRows.length };
 }
 
 function sendStateUpdate(payload = {}) {
@@ -4624,7 +4673,7 @@ ipcMain.handle("send-admin-report-email", async (event, filters = {}) => {
     throw new Error("No transactions found for the selected filter range.");
   }
   const prefix = "admin-custom-report";
-  const { filePath } = generateExcelFromRows(rows, prefix, true);
+  const { filePath } = await generatePdfFromRows(rows, prefix, true);
 
   const start = filters.startDateTime || null;
   const end = filters.endDateTime || null;
@@ -5228,7 +5277,7 @@ async function exportCustomReport(filters = {}) {
   if (!rows.length) {
     throw new Error("No webhook report rows to export.");
   }
-  return generateExcelFromRows(rows, "msg91-webhook-report", !filters.uploadId); // selected upload uses a direct single-sheet report
+  return generatePdfFromRows(rows, "msg91-webhook-report", !filters.uploadId); // selected upload uses a direct single-section report
 }
 
 ipcMain.handle("get-msg91-config", async () => {

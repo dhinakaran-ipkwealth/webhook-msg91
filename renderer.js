@@ -66,6 +66,9 @@ const customReportEmailRMs = document.getElementById("customReportEmailRMs");
 const customReportSchedule = document.getElementById("customReportSchedule");
 const schedulePanel = document.getElementById("schedulePanel");
 const scheduleEnabled = document.getElementById("scheduleEnabled");
+const deliveryReportExport = document.getElementById("deliveryReportExport");
+const deliveryReportEmailAdmin = document.getElementById("deliveryReportEmailAdmin");
+const deliveryReportEmailRMs = document.getElementById("deliveryReportEmailRMs");
 const scheduleTime = document.getElementById("scheduleTime");
 const scheduleMechanism = document.getElementById("scheduleMechanism");
 const scheduleSave = document.getElementById("scheduleSave");
@@ -317,6 +320,86 @@ deliveryReportRefreshButton.addEventListener("click", async () => {
   }
 });
 
+if (deliveryReportExport)
+  deliveryReportExport.addEventListener("click", async () => {
+    if (!selectedUploadId) {
+      showAlert("Select an upload first before exporting the delivery report.", "warning");
+      return;
+    }
+    try {
+      deliveryReportExport.disabled = true;
+      deliveryReportExport.textContent = "Exporting...";
+      const result = await window.electronAPI.exportUploadReport(selectedUploadId);
+      showAlert(
+        `Delivery report PDF exported with ${result.rowCount} rows:\n${result.filePath}`,
+        "success",
+      );
+    } catch (err) {
+      showAlert(`Export failed: ${err.message}`, "error");
+    } finally {
+      deliveryReportExport.disabled = false;
+      deliveryReportExport.textContent = "Export PDF";
+    }
+  });
+
+if (deliveryReportEmailAdmin)
+  deliveryReportEmailAdmin.addEventListener("click", async () => {
+    if (!selectedUploadId) {
+      showAlert("Select an upload first before sending the admin report.", "warning");
+      return;
+    }
+    const dateDisplay = deliveryContextSummary?.textContent || "selected upload";
+    if (
+      !confirm(
+        `Send Admin Report email for ${dateDisplay}?\n\nThis will email the selected upload delivery report as PDF to configured admin recipients.\n\nClick OK to send.`,
+      )
+    )
+      return;
+    try {
+      deliveryReportEmailAdmin.disabled = true;
+      deliveryReportEmailAdmin.textContent = "Emailing...";
+      await window.electronAPI.sendAdminReportEmail({ uploadId: selectedUploadId });
+      showAlert(
+        "Admin report email sent successfully for the selected upload.",
+        "success",
+      );
+    } catch (err) {
+      showAlert(`Admin email failed: ${err.message}`, "error");
+    } finally {
+      deliveryReportEmailAdmin.disabled = false;
+      deliveryReportEmailAdmin.textContent = "Email Admin Report";
+    }
+  });
+
+if (deliveryReportEmailRMs)
+  deliveryReportEmailRMs.addEventListener("click", async () => {
+    if (!selectedUploadId) {
+      showAlert("Select an upload first before sending RM reports.", "warning");
+      return;
+    }
+    const dateDisplay = deliveryContextSummary?.textContent || "selected upload";
+    if (
+      !confirm(
+        `Send RM Reports email for ${dateDisplay}?\n\nThis will email PDF reports to configured RM recipients for the selected upload.\n\nClick OK to send.`,
+      )
+    )
+      return;
+    try {
+      deliveryReportEmailRMs.disabled = true;
+      deliveryReportEmailRMs.textContent = "Emailing...";
+      const stats = await window.electronAPI.sendRmReports({ uploadId: selectedUploadId });
+      showAlert(
+        `RM report emails sent successfully to ${stats.sent || 0} recipient(s).`,
+        "success",
+      );
+    } catch (err) {
+      showAlert(`RM email failed: ${err.message}`, "error");
+    } finally {
+      deliveryReportEmailRMs.disabled = false;
+      deliveryReportEmailRMs.textContent = "Email RM Reports";
+    }
+  });
+
 numberSelect.addEventListener("change", () => {
   customFiltersTouched = false;
   renderTemplateOptions();
@@ -373,7 +456,7 @@ customReportRefresh.addEventListener("click", async () => {
     customReportRefresh.textContent = "Refresh Report";
   }
 });
-customReportExport.addEventListener("click", exportCustomReportExcel);
+customReportExport.addEventListener("click", exportCustomReportPdf);
 
 if (customReportEmailAdmin)
   customReportEmailAdmin.addEventListener("click", async () => {
@@ -390,7 +473,7 @@ if (customReportEmailAdmin)
       const filters = getCustomReportFilters();
       await window.electronAPI.sendAdminReportEmail(filters);
       showAlert(
-        "Admin Excel report successfully generated and sent to software@ipkwealth.com/prabhukumarasamy@ipkwealth.com!",
+        "Admin PDF report successfully generated and sent to software@ipkwealth.com/prabhukumarasamy@ipkwealth.com!",
         "success",
       );
     } catch (err) {
@@ -416,7 +499,7 @@ if (customReportEmailRMs)
       const filters = getCustomReportFilters();
       const stats = await window.electronAPI.sendRmReports(filters);
       showAlert(
-        `Grouped RM Excel reports generated successfully. Sent to ${stats.sent} RM email address(es)!`,
+        `Grouped RM PDF reports generated successfully. Sent to ${stats.sent} RM email address(es)!`,
         "success",
       );
     } catch (err) {
@@ -1288,7 +1371,7 @@ function renderUploadTable(uploads) {
       <td>${triggeredAt}</td>
       <td>
         <button class="small-button" data-upload-id="${upload.id}" title="Open this upload in the delivery report">Select</button>
-        <button class="small-button secondary-button" data-export-id="${upload.id}" title="Download Excel for this upload">Export Excel</button>
+        <button class="small-button secondary-button" data-export-id="${upload.id}" title="Download PDF for this upload">Export PDF</button>
         ${retryButton}
       </td>
     `;
@@ -1330,7 +1413,7 @@ function renderUploadTable(uploads) {
         try {
           const result = await window.electronAPI.exportUploadReport(uploadId);
           showAlert(
-            `Excel report exported with ${result.rowCount} rows:\n${result.filePath}`,
+            `PDF report exported with ${result.rowCount} rows:\n${result.filePath}`,
             "success",
           );
         } catch (err) {
@@ -2117,61 +2200,76 @@ function renderCustomSummary(rows) {
   // Total records are the exact rows currently visible after filters are applied.
   // A customer may appear more than once because sent, delivered, failed, and reply
   // webhooks can arrive as separate MSG91 events.
+  const getStatusKey = (row) =>
+    String(
+      row.normalizedStatus || row.deliveryStatus || row.numberDeliveryStatus || "",
+    ).toLowerCase();
+
+  const isDelivered = (row) => {
+    const status = getStatusKey(row);
+    return status.includes("deliver") || status.includes("read") || status.includes("success");
+  };
+
+  const isFailed = (row) => {
+    const status = getStatusKey(row);
+    return (
+      status.includes("fail") ||
+      status.includes("deny") ||
+      status.includes("rejected") ||
+      status.includes("undelivered") ||
+      status.includes("error")
+    );
+  };
+
+  const isAwaitingDeliveryUpdate = (row) => {
+    if (row.eventType === "inbound") return false;
+    const status = getStatusKey(row);
+    return (
+      !status ||
+      status === "sent" ||
+      status === "pending" ||
+      status.includes("submit") ||
+      status.includes("queued")
+    );
+  };
+
   const counts = {
-    total: rows.length,
+    totalRows: rows.length,
     uniqueCustomers: uniqueCustomers.size,
-    outbound: outboundRows.length,
-    replyRate: formatPercent(
-      repliedRows.length,
-      uniqueCustomers.size || outboundRows.length,
-    ),
-    // "sent" means MSG91 accepted/submitted the message, but no delivered/read
-    // or failed callback has replaced it yet for the filtered report rows.
-    sent: rows.filter((row) => row.normalizedStatus === "sent").length,
-    // MSG91 "read" callbacks are normalized as delivered by the webhook server,
-    // so this card answers whether the customer received/read the outbound message.
-    delivered: rows.filter((row) => row.normalizedStatus === "delivered")
-      .length,
-    // Customer replies are retrieved from inbound webhook rows. The reply text is
-    // extracted from text/content/button/interactive/messages fields, then matched
-    // to sent reports by replyMsgId/messageId/responseId and mobile fallback.
-    failed: rows.filter((row) => row.normalizedStatus === "failed").length,
-    replied: repliedRows.length,
+    outboundRows: outboundRows.length,
+    replyEvents: repliedRows.length,
+    delivered: rows.filter(isDelivered).length,
+    awaitingDeliveryUpdate: outboundRows.filter(isAwaitingDeliveryUpdate).length,
+    failed: rows.filter(isFailed).length,
   };
 
   const cards = [
     {
-      label: "Total Customers",
-      value: counts.total,
-      note: "Visible sent, delivery, failed, and reply webhook events after filters.",
+      label: "Visible events",
+      value: counts.totalRows,
+      note: "Visible MSG91 webhook event rows after filters.",
     },
     {
-      label: "Unique Customers",
+      label: "Unique customers",
       value: counts.uniqueCustomers,
       note: "Counted from customer mobile numbers in the filtered report.",
     },
     {
       label: "Delivered / Read",
       value: counts.delivered,
-      note: "Rows where MSG91 returned delivered or read status.",
+      note: "Rows where MSG91 returned delivered, read, or success status.",
       tone: "good",
     },
     {
-      label: "Customer Replies",
-      value: counts.replied,
-      note: "Sent records that have inbound customer reply evidence.",
+      label: "Customer replies",
+      value: counts.replyEvents,
+      note: "Inbound reply events or rows with reply evidence. Delivery may still be pending.",
       tone: "reply",
     },
-   /*  {
-      label: "Reply Rate",
-      value: counts.replyRate,
-      note: "Customer replies divided by unique customers in this view.",
-      tone: "reply",
-    }, */
     {
-      label: "Awaiting Delivery Update",
-      value: counts.sent,
-      note: "Sent to MSG91, but no delivered/read/failed callback yet.",
+      label: "Awaiting delivery update",
+      value: counts.awaitingDeliveryUpdate,
+      note: "Outbound messages sent to MSG91 that have not yet received a delivered/read/failed callback.",
       tone: "pending",
     },
     {
@@ -2475,7 +2573,7 @@ function csvValue(value) {
   return `"${text.replace(/"/g, '""')}"`;
 }
 
-async function exportCustomReportExcel() {
+async function exportCustomReportPdf() {
   if (!lastCustomReportRows.length) {
     showAlert("No custom report rows to export.", "warning");
     return;
@@ -2486,7 +2584,7 @@ async function exportCustomReportExcel() {
       getCustomReportFilters(),
     );
     showAlert(
-      `Webhook Excel report exported with ${result.rowCount} rows:\n${result.filePath}`,
+      `Webhook PDF report exported with ${result.rowCount} rows:\n${result.filePath}`,
       "success",
     );
   } catch (err) {
