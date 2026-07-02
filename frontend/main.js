@@ -5373,7 +5373,7 @@ function getDeliveryStatusLinesForReport(row) {
     lines.push("Sent: -");
   }
   if (getReceivedDeliveryStatusForReport(row)) {
-    lines.push(`Customer replied: ${replyAt || "-"}`);
+    lines.push(`Customer reply: ${replyAt || "-"}`);
   }
 
   return lines.join("\n") || "-";

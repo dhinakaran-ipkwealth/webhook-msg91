@@ -361,7 +361,7 @@ async function sendRmGroupedReportsDirect(filters = {}) {
 
     // Generate PDF attachment for this RM
     const filenamePrefix = `rm-report-${rmNumber}`;
-    const { filePath } = await generatePdfFromRows(rmRows, filenamePrefix);
+    const { filePath } = await generatePdfFromRows(rmRows, filenamePrefix, false, filters);
 
     // Send email to RM
     if (
@@ -4027,9 +4027,13 @@ function getLogoDataUri() {
 }
 
 function getPdfSummaryHtml(rows, options = {}) {
-  const totalRows = rows.length;
+  // Outbound rows are the actual dispatched communications. Inbound rows are
+  // the investor's replies to those communications - a separate dimension -
+  // so they're excluded from the outbound status buckets below to avoid
+  // double-counting the same investor interaction in two rows.
+  const outboundRows = rows.filter((row) => row.eventType !== "inbound");
   const uniqueCustomers = new Set(
-    rows
+    outboundRows
       .map((row) =>
         String(
           row.normalizedMobile ||
@@ -4050,7 +4054,7 @@ function getPdfSummaryHtml(rows, options = {}) {
       row.eventType === "inbound" || row.customReply || row.lastReplyAt,
   ).length;
 
-  const deliveredCount = rows.filter((row) => {
+  const isDelivered = (row) => {
     const status = String(
       row.deliveryStatus || row.numberDeliveryStatus || row.normalizedStatus || "",
     ).toLowerCase();
@@ -4059,9 +4063,9 @@ function getPdfSummaryHtml(rows, options = {}) {
       status.includes("read") ||
       status.includes("success")
     );
-  }).length;
+  };
 
-  const failedCount = rows.filter((row) => {
+  const isFailed = (row) => {
     const status = String(
       row.deliveryStatus || row.numberDeliveryStatus || row.normalizedStatus || "",
     ).toLowerCase();
@@ -4072,31 +4076,24 @@ function getPdfSummaryHtml(rows, options = {}) {
       status.includes("undelivered") ||
       status.includes("error")
     );
-  }).length;
+  };
 
-  const awaitingCount = rows.filter((row) => {
-    if (row.eventType === "inbound") return false;
-    const status = String(
-      row.deliveryStatus || row.numberDeliveryStatus || row.normalizedStatus || "",
-    ).toLowerCase();
-    return (
-      !status ||
-      status === "sent" ||
-      status === "pending" ||
-      status.includes("submit") ||
-      status.includes("queued")
-    );
-  }).length;
+  const deliveredCount = outboundRows.filter(isDelivered).length;
+  const failedCount = outboundRows.filter(isFailed).length;
+  // Everything outbound that is neither a confirmed delivery nor a confirmed
+  // failure - so Delivered + Pending + Failed always reconciles exactly to
+  // Total Communication Events.
+  const pendingCount = outboundRows.length - deliveredCount - failedCount;
 
   const summaryRows = [
     ["Report type", options.reportType || "MSG91 Webhook Report"],
     ["Date range", options.dateRange || "Webhook event range"],
-    ["Total event rows", String(totalRows)],
-    ["Unique customers", String(uniqueCustomers)],
-    ["Delivered / Read", String(deliveredCount)],
-    ["Customer replies", String(replyCount)],
-    ["Awaiting delivery update", String(awaitingCount)],
-    ["Failed / Technical issues", String(failedCount)],
+    ["Total Communication Events", String(outboundRows.length)],
+    ["Investors Communicated To", String(uniqueCustomers)],
+    ["Successfully Delivered to Investor", String(deliveredCount)],
+    ["Investor Acknowledgements", String(replyCount)],
+    ["Pending Delivery Confirmation", String(pendingCount)],
+    ["Delivery Failed - Action Required", String(failedCount)],
   ];
 
   return `<table class="summary-table"><tbody>${summaryRows
@@ -4124,13 +4121,20 @@ function buildPdfHtmlDocument(title, summaryHtml, rowsHtml) {
   h1, h2 { margin: 0 0 12px 0; font-weight: 600; }
   h1 { font-size: 24px; }
   h2 { font-size: 20px; margin-top: 32px; }
-  .summary-table, .row-table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
-  .summary-table th, .summary-table td, .row-table th, .row-table td { border: 1px solid #ccc; padding: 8px 10px; vertical-align: top; }
+  .summary-table, .row-table { width: 100%; border-collapse: collapse; margin-bottom: 24px; table-layout: fixed; }
+  .summary-table th, .summary-table td, .row-table th, .row-table td { border: 1px solid #ccc; padding: 6px 8px; vertical-align: top; word-break: break-word; overflow-wrap: anywhere; white-space: normal; }
+  .summary-table th, .summary-table td { font-size: 12px; }
   .summary-table th { background: #f1f5fb; text-align: left; font-weight: 700; width: 30%; }
   .summary-table td { background: #fff; }
+  .row-table th, .row-table td { font-size: 10.5px; }
   .row-table th { background: #f7f9fc; text-align: left; font-weight: 700; }
   .row-table td { background: #fff; }
   .row-table thead th { background: #0c3d91; color: #fff; }
+  .row-table { border: 2px solid #0c3d91; }
+  .row-table tr { page-break-inside: avoid; break-inside: avoid; }
+  .pdf-status-stack { display: flex; flex-direction: column; }
+  .pdf-status-line { padding: 1px 0; }
+  .pdf-status-reply { border-top: 1px solid #94a3b8; margin-top: 6px; padding-top: 6px; }
   .footer { margin-top: 16px; font-size: 12px; color: #555; }
   .section-title { margin: 30px 0 12px; font-size: 18px; color: #0c3d91; }
 </style>
@@ -4151,9 +4155,29 @@ function buildPdfHtmlDocument(title, summaryHtml, rowsHtml) {
 </html>`;
 }
 
+const PDF_ROW_TABLE_HTML_COLUMNS = new Set(["Delivery Status"]);
+
+const PDF_ROW_TABLE_COLUMN_WIDTHS = {
+  "Date / Time": 8,
+  "Customer Name": 8,
+  "Customer Mobile": 7,
+  "Sender Mobile": 7,
+  "Template Name": 7,
+  "Sent Message": 15,
+  "Delivery Status": 9,
+  "Customer Reply": 15,
+  "Reply Time": 7,
+  "Request ID": 7,
+  "Event Type": 5,
+  Status: 5,
+};
+
 function getPdfRowsTableHtml(rows) {
   if (!rows || !rows.length) return "";
   const headers = Object.keys(rows[0]);
+  const colgroupHtml = `<colgroup>${headers
+    .map((header) => `<col style="width:${PDF_ROW_TABLE_COLUMN_WIDTHS[header] || 8}%" />`)
+    .join("")}</colgroup>`;
   const headerHtml = `<thead><tr>${headers
     .map((header) => `<th>${htmlEscapeForPdf(header)}</th>`)
     .join("")}</tr></thead>`;
@@ -4161,13 +4185,17 @@ function getPdfRowsTableHtml(rows) {
     .map(
       (row) =>
         `<tr>${headers
-          .map((header) =>
-            `<td>${htmlEscapeForPdf(String(row[header] ?? ""))}</td>`,
-          )
+          .map((header) => {
+            const value = row[header] ?? "";
+            const cellHtml = PDF_ROW_TABLE_HTML_COLUMNS.has(header)
+              ? String(value || "-")
+              : htmlEscapeForPdf(String(value));
+            return `<td>${cellHtml}</td>`;
+          })
           .join("")}</tr>`,
     )
     .join("");
-  return `<h2>Full Report Data</h2><table class="row-table">${headerHtml}<tbody>${bodyHtml}</tbody></table>`;
+  return `<h2>Full Report Data</h2><table class="row-table">${colgroupHtml}${headerHtml}<tbody>${bodyHtml}</tbody></table>`;
 }
 
 async function renderPdfDocument(html, filenamePrefix, rowCount) {
@@ -4186,6 +4214,7 @@ async function renderPdfDocument(html, filenamePrefix, rowCount) {
     printBackground: true,
     marginsType: 1,
     pageSize: "A4",
+    landscape: true,
   });
 
   const exportDir = app.getPath("downloads");
@@ -4198,10 +4227,34 @@ async function renderPdfDocument(html, filenamePrefix, rowCount) {
   return { filePath, rowCount };
 }
 
-function generatePdfFromRows(rows, filenamePrefix, isMultiSection = false) {
+function formatDateRangeForReport(filters, rows) {
+  const start = filters?.startDateTime
+    ? formatDateTimeForReport(filters.startDateTime)
+    : "";
+  const end = filters?.endDateTime
+    ? formatDateTimeForReport(filters.endDateTime)
+    : "";
+  if (start && end) return `${start} to ${end}`;
+  if (start) return `From ${start}`;
+  if (end) return `Until ${end}`;
+
+  // No explicit filter window (e.g. a single upload's export) - fall back to
+  // the actual earliest/latest event timestamps present in the report rows.
+  const timestamps = rows
+    .map((row) => row.receivedAt || row.statusUpdatedAt || row.requestedAt || row.sentAt)
+    .filter(Boolean)
+    .map((value) => new Date(value).getTime())
+    .filter((time) => !Number.isNaN(time));
+  if (!timestamps.length) return "All available records";
+  const minText = formatDateTimeForReport(new Date(Math.min(...timestamps)));
+  const maxText = formatDateTimeForReport(new Date(Math.max(...timestamps)));
+  return minText === maxText ? minText : `${minText} to ${maxText}`;
+}
+
+function generatePdfFromRows(rows, filenamePrefix, isMultiSection = false, filters = {}) {
   const summaryHtml = getPdfSummaryHtml(rows, {
-    reportType: isMultiSection ? "Grouped webhook report" : "MSG91 Webhook Report",
-    dateRange: isMultiSection ? "Webhook event date range" : "Webhook event range",
+    reportType: "IPK Wealth Communications",
+    dateRange: formatDateRangeForReport(filters, rows),
   });
   const rowsHtml = getPdfRowsTableHtml(
     rows.map((row) => ({
@@ -4234,7 +4287,7 @@ function generatePdfFromRows(rows, filenamePrefix, isMultiSection = false) {
         row.rawPayload?.campaign_name ||
         "",
       "Sent Message": row.sentMessage || getSentMessageForReport(row),
-      "Delivery Status": getDeliveryStatusLinesForReport(row),
+      "Delivery Status": getDeliveryStatusHtmlForReport(row),
       "Customer Reply": getReceivedMessageForReport(row),
       "Reply Time": getReportReplyTime(row),
       "Request ID":
@@ -4249,7 +4302,7 @@ function generatePdfFromRows(rows, filenamePrefix, isMultiSection = false) {
       "Status": row.normalizedStatus || row.deliveryStatus || row.numberDeliveryStatus || row.rawPayload?.status || "",
     })),
   );
-  const html = buildPdfHtmlDocument("MSG91 Webhook Report", summaryHtml, rowsHtml);
+  const html = buildPdfHtmlDocument("IPK Wealth Communications", summaryHtml, rowsHtml);
   return renderPdfDocument(html, filenamePrefix, rows.length);
 }
 
@@ -4851,7 +4904,7 @@ ipcMain.handle("send-admin-report-email", async (event, filters = {}) => {
     throw new Error("No transactions found for the selected filter range.");
   }
   const prefix = "admin-custom-report";
-  const { filePath } = await generatePdfFromRows(rows, prefix, true);
+  const { filePath } = await generatePdfFromRows(rows, prefix, true, filters);
 
   const start = filters.startDateTime || null;
   const end = filters.endDateTime || null;
@@ -5370,30 +5423,54 @@ function getReportReplyTime(row) {
   return "";
 }
 
-function getDeliveryStatusLinesForReport(row) {
+function getDeliveryStatusPartsForReport(row) {
   const sentStatus = String(getSentDeliveryStatusForReport(row) || "").toLowerCase();
   const sentAt = formatDateTimeForReport(
     row.requestedAt || row.sentAt || row.receivedAt || row.statusUpdatedAt,
   );
   const statusAt = formatDateTimeForReport(row.statusUpdatedAt || row.updatedAt || row.receivedAt);
   const replyAt = getReportReplyTime(row);
-  const lines = [];
+  const sentLines = [];
 
   if (sentStatus && sentStatus !== "failed") {
-    lines.push(`Sent: ${sentAt || "-"}`);
+    sentLines.push(`Sent: ${sentAt || "-"}`);
   }
   if (sentStatus.includes("deliver") || sentStatus.includes("read")) {
-    lines.push(`Delivered: ${statusAt || "-"}`);
+    sentLines.push(`Delivered: ${statusAt || "-"}`);
   } else if (sentStatus.includes("fail")) {
-    lines.push(`Failed: ${statusAt || "-"}`);
+    sentLines.push(`Failed: ${statusAt || "-"}`);
   } else if (!sentStatus && row.eventType !== "inbound") {
-    lines.push("Sent: -");
-  }
-  if (getReceivedDeliveryStatusForReport(row)) {
-    lines.push(`Customer replied: ${replyAt || "-"}`);
+    sentLines.push("Sent: -");
   }
 
+  const replyLine = getReceivedDeliveryStatusForReport(row)
+    ? `Customer reply: ${replyAt || "-"}`
+    : "";
+
+  return { sentLines, replyLine };
+}
+
+function getDeliveryStatusLinesForReport(row) {
+  const { sentLines, replyLine } = getDeliveryStatusPartsForReport(row);
+  const lines = replyLine ? [...sentLines, replyLine] : sentLines;
   return lines.join("\n") || "-";
+}
+
+// PDF-only rendering: keeps the "Sent"/"Delivered"/"Failed" lines visually
+// grouped and separates the "Customer replied" line with a divider so the
+// two events (dispatch vs. reply) are never mistaken for one continuous line.
+function getDeliveryStatusHtmlForReport(row) {
+  const { sentLines, replyLine } = getDeliveryStatusPartsForReport(row);
+  if (!sentLines.length && !replyLine) return "-";
+
+  const sentHtml = sentLines
+    .map((line) => `<div class="pdf-status-line">${htmlEscapeForPdf(line)}</div>`)
+    .join("");
+  const replyHtml = replyLine
+    ? `<div class="pdf-status-line pdf-status-reply">${htmlEscapeForPdf(replyLine)}</div>`
+    : "";
+
+  return `<div class="pdf-status-stack">${sentHtml}${replyHtml}</div>`;
 }
 
 function getReceivedMessageForReport(row) {
@@ -5507,7 +5584,7 @@ async function exportCustomReport(filters = {}) {
   if (!rows.length) {
     throw new Error("No webhook report rows to export.");
   }
-  return generatePdfFromRows(rows, "msg91-webhook-report", !filters.uploadId); // selected upload uses a direct single-section report
+  return generatePdfFromRows(rows, "msg91-webhook-report", !filters.uploadId, filters); // selected upload uses a direct single-section report
 }
 
 ipcMain.handle("get-msg91-config", async () => {

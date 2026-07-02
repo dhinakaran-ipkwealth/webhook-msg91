@@ -2205,15 +2205,18 @@ function formatPercent(value, total) {
 }
 
 function renderCustomSummary(rows) {
+  // Outbound rows are the actual dispatched communications. Inbound rows are
+  // the investor's replies to those communications - a separate dimension -
+  // so they're excluded from the outbound status buckets below to avoid
+  // double-counting the same investor interaction in two cards.
   const outboundRows = rows.filter((row) => row.eventType !== "inbound");
-  const uniqueCustomers = new Set(rows.map(getCustomerKey).filter(Boolean));
+  const uniqueCustomers = new Set(
+    outboundRows.map(getCustomerKey).filter(Boolean),
+  );
   const repliedRows = rows.filter(
     (row) => row.eventType === "inbound" || row.customReply || row.lastReplyAt,
   );
 
-  // Total records are the exact rows currently visible after filters are applied.
-  // A customer may appear more than once because sent, delivered, failed, and reply
-  // webhooks can arrive as separate MSG91 events.
   const getStatusKey = (row) =>
     String(
       row.normalizedStatus || row.deliveryStatus || row.numberDeliveryStatus || "",
@@ -2235,61 +2238,55 @@ function renderCustomSummary(rows) {
     );
   };
 
-  const isAwaitingDeliveryUpdate = (row) => {
-    if (row.eventType === "inbound") return false;
-    const status = getStatusKey(row);
-    return (
-      !status ||
-      status === "sent" ||
-      status === "pending" ||
-      status.includes("submit") ||
-      status.includes("queued")
-    );
-  };
+  const delivered = outboundRows.filter(isDelivered).length;
+  const failed = outboundRows.filter(isFailed).length;
+  // Everything outbound that is neither a confirmed delivery nor a confirmed
+  // failure - covers "sent"/"queued"/blank status - so Delivered + Pending +
+  // Failed always reconciles exactly to Total Communication Events.
+  const pending = outboundRows.length - delivered - failed;
 
   const counts = {
-    totalRows: rows.length,
+    total: outboundRows.length,
     uniqueCustomers: uniqueCustomers.size,
-    outboundRows: outboundRows.length,
     replyEvents: repliedRows.length,
-    delivered: rows.filter(isDelivered).length,
-    awaitingDeliveryUpdate: outboundRows.filter(isAwaitingDeliveryUpdate).length,
-    failed: rows.filter(isFailed).length,
+    delivered,
+    pending,
+    failed,
   };
 
   const cards = [
     {
-      label: "Visible events",
-      value: counts.totalRows,
-      note: "Visible MSG91 webhook event rows after filters.",
+      label: "Total Communication Events",
+      value: counts.total,
+      note: "Dispatched messages tracked in this view (Delivered + Pending + Failed).",
     },
     {
-      label: "Unique customers",
+      label: "Investors Communicated To",
       value: counts.uniqueCustomers,
-      note: "Counted from customer mobile numbers in the filtered report.",
+      note: "Unique investor mobile numbers that received a communication in this view.",
     },
     {
-      label: "Delivered / Read",
+      label: "Successfully Delivered to Investor",
       value: counts.delivered,
-      note: "Rows where MSG91 returned delivered, read, or success status.",
+      note: "Communications confirmed delivered, read, or success by MSG91.",
       tone: "good",
     },
     {
-      label: "Customer replies",
+      label: "Investor Acknowledgements",
       value: counts.replyEvents,
-      note: "Inbound reply events or rows with reply evidence. Delivery may still be pending.",
+      note: "Communications with an inbound investor reply as evidence of acknowledgement.",
       tone: "reply",
     },
     {
-      label: "Awaiting delivery update",
-      value: counts.awaitingDeliveryUpdate,
-      note: "Outbound messages sent to MSG91 that have not yet received a delivered/read/failed callback.",
+      label: "Pending Delivery Confirmation",
+      value: counts.pending,
+      note: "Dispatched to MSG91, awaiting a delivered/read/failed callback.",
       tone: "pending",
     },
     {
-      label: "Failed / Technical Issues",
+      label: "Delivery Failed - Action Required",
       value: counts.failed,
-      note: "Rows where MSG91 returned failed, rejected, denied, or undelivered status.",
+      note: "Communications MSG91 reported as failed, rejected, denied, or undelivered.",
       tone: "bad",
     },
   ];

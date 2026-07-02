@@ -156,6 +156,16 @@
   margin-bottom: 20px;
 }
 
+#customReportSummaryGrid {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+@media (max-width: 860px) {
+  #customReportSummaryGrid {
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  }
+}
+
 .summary-item {
   background: white;
   border-radius: 22px;
