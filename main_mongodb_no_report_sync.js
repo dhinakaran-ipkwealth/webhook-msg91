@@ -5,7 +5,8 @@ const {
   Menu,
   Tray,
   ipcMain,
-  nativeImage, session,
+  nativeImage,
+  session,
 } = require("electron");
 const path = require("path");
 const fs = require("fs");
@@ -31,19 +32,19 @@ if (!app.isPackaged) {
   const devUserDataPath =
     process.env.ELECTRON_USER_DATA_DIR ||
     path.join(app.getPath("appData"), "webhook-msg91-dev");
-  app.setName("Webhook MSG91 Dev");
+  app.setName("IPK Wealth Communications Dev");
   app.setPath("userData", devUserDataPath);
 }
 
-
 app.whenReady().then(() => {
   // Clear cache for the default session
-  session.defaultSession.clearCache()
+  session.defaultSession
+    .clearCache()
     .then(() => {
-      console.log('HTTP cache cleared successfully.');
+      console.log("HTTP cache cleared successfully.");
     })
     .catch((err) => {
-      console.error('Failed to clear cache:', err);
+      console.error("Failed to clear cache:", err);
     });
 });
 
@@ -95,6 +96,7 @@ let webhookPort = Number(
 );
 const reportRefreshIntervalMs = 2000;
 const defaultWebhookBaseUrl = "https://crm.ipkwealth.com";
+const EMAIL_NOTIFICATIONS_ENABLED = false;
 let db;
 let msg91ConfigCache = null;
 let mongoClient = null;
@@ -109,6 +111,7 @@ let isDbClosing = false;
 let scheduleConfig = null;
 let scheduleTimer = null;
 let dailyCacheTimer = null;
+const REPORT_SCHEDULER_ENABLED = false;
 
 // IST (Asia/Calcutta) timezone helpers. All MongoDB queries use UTC Date objects.
 const IST_OFFSET_MINUTES = 330; // UTC+5:30
@@ -125,16 +128,24 @@ function istLocalToUTC(istDate) {
 // Yesterday HH:MM IST to today HH:MM IST (default 10:00 AM IST).
 function getTodayISTDataWindow(scheduleHour = 10, scheduleMin = 0) {
   const ist = nowIST();
-  const y = ist.getUTCFullYear(), mo = ist.getUTCMonth(), d = ist.getUTCDate();
-  const end = istLocalToUTC(new Date(Date.UTC(y, mo, d, scheduleHour, scheduleMin, 0, 0)));
-  const start = istLocalToUTC(new Date(Date.UTC(y, mo, d - 1, scheduleHour, scheduleMin, 0, 0)));
+  const y = ist.getUTCFullYear(),
+    mo = ist.getUTCMonth(),
+    d = ist.getUTCDate();
+  const end = istLocalToUTC(
+    new Date(Date.UTC(y, mo, d, scheduleHour, scheduleMin, 0, 0)),
+  );
+  const start = istLocalToUTC(
+    new Date(Date.UTC(y, mo, d - 1, scheduleHour, scheduleMin, 0, 0)),
+  );
   return { start, end };
 }
 
 // Milliseconds until the next occurrence of HH:MM in IST
 function msUntilNextIST(hh, mm) {
   const ist = nowIST();
-  const y = ist.getUTCFullYear(), mo = ist.getUTCMonth(), d = ist.getUTCDate();
+  const y = ist.getUTCFullYear(),
+    mo = ist.getUTCMonth(),
+    d = ist.getUTCDate();
   let next = istLocalToUTC(new Date(Date.UTC(y, mo, d, hh, mm, 0, 0)));
   if (next.getTime() <= Date.now()) {
     next = istLocalToUTC(new Date(Date.UTC(y, mo, d + 1, hh, mm, 0, 0)));
@@ -176,7 +187,14 @@ function clearScheduleTimer() {
 
 function scheduleNextRun(cfg) {
   clearScheduleTimer();
+  if (!REPORT_SCHEDULER_ENABLED) return;
   if (!cfg || !cfg.enabled) return;
+  if (cfg.mechanism === "email" && !EMAIL_NOTIFICATIONS_ENABLED) {
+    console.log(
+      "Email notifications are disabled. Scheduled email report will not run.",
+    );
+    return;
+  }
   const [hh, mm] = (cfg.time || "10:00").split(":").map((v) => Number(v));
 
   async function runAndReschedule() {
@@ -186,7 +204,7 @@ function scheduleNextRun(cfg) {
         const { start, end } = getTodayISTDataWindow(hh, mm);
         console.log(
           `Scheduled run triggered. Generating 24-hour RM and Admin reports ` +
-          `(${start.toISOString()} to ${end.toISOString()} UTC, ${cfg.time} IST yesterday to today)...`,
+            `(${start.toISOString()} to ${end.toISOString()} UTC, ${cfg.time} IST yesterday to today)...`,
         );
 
         const timeFilters = {
@@ -210,7 +228,10 @@ function scheduleNextRun(cfg) {
         const exportFolder = process.env.EXPORT_FOLDER;
         if (exportFolder) {
           try {
-            const dest = path.join(exportFolder, path.basename(result.filePath));
+            const dest = path.join(
+              exportFolder,
+              path.basename(result.filePath),
+            );
             fs.copyFileSync(result.filePath, dest);
           } catch (e) {
             console.warn("Auto-export copy failed:", e.message);
@@ -228,11 +249,24 @@ function scheduleNextRun(cfg) {
 }
 
 async function deliverFileByEmail(filePath, toEmailsCsv) {
+  if (!EMAIL_NOTIFICATIONS_ENABLED) {
+    console.log(
+      `Email notifications are disabled. Skipping email delivery for ${filePath}.`,
+    );
+    return { skipped: true, filePath };
+  }
   // Backwards compatibility fallback if needed
   await sendAdminReportEmailDirect(filePath, null, null);
 }
 
 async function sendAdminReportEmailDirect(filePath, startIso, endIso) {
+  if (!EMAIL_NOTIFICATIONS_ENABLED) {
+    console.log(
+      `Email notifications are disabled. Skipping admin report email for ${filePath}.`,
+    );
+    return { skipped: true, filePath };
+  }
+
   if (
     String(process.env.DISABLE_EMAIL_DELIVERY || "").toLowerCase() === "true"
   ) {
@@ -255,20 +289,18 @@ async function sendAdminReportEmailDirect(filePath, startIso, endIso) {
     },
   });
 
-  const to = (process.env.ADMIN_EMAILS_TO || "prabhukumarasamy@ipkwealth.com")
+  const to = (process.env.ADMIN_EMAILS_TO || "") // prabhukumarasamy@ipkwealth.com
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
   const cc = [
-    process.env.ADMIN_EMAILS_CC_SALES1,
-    process.env.ADMIN_EMAILS_CC_SALES2,
+    // process.env.ADMIN_EMAILS_CC_SALES1,
+    // process.env.ADMIN_EMAILS_CC_SALES2,
   ]
     .map((s) => s?.trim())
     .filter(Boolean);
-  const bcc = (
-    process.env.ADMIN_EMAILS_BCC ||
-    "dhinakaran@ipkwealth.com,vijaytp@ipkwealth.com"
-  )
+  const bcc = (process.env.ADMIN_EMAILS_BCC || "dhinakaran@ipkwealth.com")
+    // ,vijaytp@ipkwealth.com"
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
@@ -303,6 +335,11 @@ async function sendAdminReportEmailDirect(filePath, startIso, endIso) {
 }
 
 async function sendRmGroupedReportsDirect(filters = {}) {
+  if (!EMAIL_NOTIFICATIONS_ENABLED) {
+    console.log("Email notifications are disabled. Skipping RM report emails.");
+    return { count: 0, sent: 0, skipped: true };
+  }
+
   // 1. Get all rows matching the filters
   const allRows = await getCustomReportRows(filters);
   if (!allRows.length) {
@@ -361,7 +398,12 @@ async function sendRmGroupedReportsDirect(filters = {}) {
 
     // Generate PDF attachment for this RM
     const filenamePrefix = `rm-report-${rmNumber}`;
-    const { filePath } = await generatePdfFromRows(rmRows, filenamePrefix, false, filters);
+    const { filePath } = await generatePdfFromRows(
+      rmRows,
+      filenamePrefix,
+      false,
+      filters,
+    );
 
     // Send email to RM
     if (
@@ -394,7 +436,7 @@ async function sendRmGroupedReportsDirect(filters = {}) {
         "software@ipkwealth.com",
       to: rmEmail,
       subject: `Relationship Manager Webhook Report - ${rm.label}`,
-      text: `Hi ${rm.label.split("-")[1]?.trim() || "RM"},\n\nPlease find attached your grouped MSG91 transaction PDF report representing deliveries and customer replies for your assigned sender number (${rmNumber}).\n\nReport Period: Selected Date-Time Range\nGenerated At: ${new Date().toLocaleString()}\n\nBest Regards,\nIPK Wealth Services Private Limited`,
+      text: `Hi ${rm.label.split("-")[1]?.trim() || "RM"},\n\nPlease find attached your grouped transaction PDF report representing deliveries and customer replies for your assigned sender number (${rmNumber}).\n\nReport Period: Selected Date-Time Range\nGenerated At: ${new Date().toLocaleString()}\n\nBest Regards,\nIPK Wealth Services Private Limited`,
       attachments: [{ filename: path.basename(filePath), path: filePath }],
     };
 
@@ -444,7 +486,7 @@ const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
 if (!gotSingleInstanceLock) {
   console.warn(
-    "Another Webhook MSG91 instance is already running. Exiting this launch.",
+    "Another IPK Wealth Communications instance is already running. Exiting this launch.",
   );
   app.quit();
 }
@@ -1133,40 +1175,61 @@ async function initMongo() {
       updatedAt: -1,
     });
 
-    await safeCreateIndex(webhookEventsDb.collection("whatsapp_webhook_events"), {
-      receivedAt: -1,
-    });
+    await safeCreateIndex(
+      webhookEventsDb.collection("whatsapp_webhook_events"),
+      {
+        receivedAt: -1,
+      },
+    );
 
-    await safeCreateIndex(webhookEventsDb.collection("whatsapp_webhook_events"), {
-      matchedUploadId: 1,
-      receivedAt: -1,
-    });
+    await safeCreateIndex(
+      webhookEventsDb.collection("whatsapp_webhook_events"),
+      {
+        matchedUploadId: 1,
+        receivedAt: -1,
+      },
+    );
 
-    await safeCreateIndex(webhookEventsDb.collection("whatsapp_webhook_events"), {
-      uploadId: 1,
-      receivedAt: -1,
-    });
+    await safeCreateIndex(
+      webhookEventsDb.collection("whatsapp_webhook_events"),
+      {
+        uploadId: 1,
+        receivedAt: -1,
+      },
+    );
 
-    await safeCreateIndex(webhookEventsDb.collection("whatsapp_webhook_events"), {
-      source: 1,
-      receivedAt: -1,
-    });
+    await safeCreateIndex(
+      webhookEventsDb.collection("whatsapp_webhook_events"),
+      {
+        source: 1,
+        receivedAt: -1,
+      },
+    );
 
-    await safeCreateIndex(webhookEventsDb.collection("whatsapp_webhook_events"), {
-      source: 1,
-      sourceEventId: 1,
-    });
+    await safeCreateIndex(
+      webhookEventsDb.collection("whatsapp_webhook_events"),
+      {
+        source: 1,
+        sourceEventId: 1,
+      },
+    );
 
-    await safeCreateIndex(webhookEventsDb.collection("whatsapp_webhook_events"), {
-      normalizedMobile: 1,
-      receivedAt: -1,
-    });
+    await safeCreateIndex(
+      webhookEventsDb.collection("whatsapp_webhook_events"),
+      {
+        normalizedMobile: 1,
+        receivedAt: -1,
+      },
+    );
 
-    await safeCreateIndex(webhookEventsDb.collection("whatsapp_webhook_events"), {
-      eventType: 1,
-      normalizedStatus: 1,
-      receivedAt: -1,
-    });
+    await safeCreateIndex(
+      webhookEventsDb.collection("whatsapp_webhook_events"),
+      {
+        eventType: 1,
+        normalizedStatus: 1,
+        receivedAt: -1,
+      },
+    );
 
     await safeCreateIndex(
       webhookEventsDb.collection("whatsapp_webhook_events"),
@@ -1191,9 +1254,12 @@ async function initMongo() {
       },
     );
 
-    await safeCreateIndex(webhookEventsDb.collection("whatsapp_webhook_events"), {
-      modifiedAt: -1,
-    });
+    await safeCreateIndex(
+      webhookEventsDb.collection("whatsapp_webhook_events"),
+      {
+        modifiedAt: -1,
+      },
+    );
 
     await safeCreateIndex(
       mongoDb.collection("whatsapp_sender_reports"),
@@ -1293,7 +1359,7 @@ function assertPublicWebhookConfigured() {
   const webhookBaseUrl = getWebhookBaseUrl();
   if (isLocalWebhookUrl(webhookBaseUrl)) {
     throw new Error(
-      "Set WEBHOOK_PUBLIC_BASE_URL to https://crm.ipkwealth.com before sending. MSG91 cannot send reports or replies to localhost/127.0.0.1.",
+      "Set WEBHOOK_PUBLIC_BASE_URL to https://crm.ipkwealth.com before sending. Reports and replies cannot reach localhost/127.0.0.1.",
     );
   }
   if (!/^https:\/\//i.test(webhookBaseUrl)) {
@@ -2277,8 +2343,7 @@ async function listCustomReportRowsFromMongo(filters = {}) {
       const inferredSentMessage =
         (event.eventType === "inbound"
           ? await getMatchedSentMessageForInboundWebhookEvent(event)
-          : "") ||
-        getSentMessageForReport({ ...event, csvRowData });
+          : "") || getSentMessageForReport({ ...event, csvRowData });
       return {
         ...normalizeMongoDoc(event),
         id: event.id || event.eventId || event.eventKey || `event-${index}`,
@@ -2375,7 +2440,11 @@ async function listCustomReportRowsFromMongo(filters = {}) {
 async function listSenderReportRowsForCustomReport(filters = {}) {
   await requireMongoDb();
   const query = {};
-  addDateFieldConditions(query, ["sentAt", "updatedAt", "lastReplyAt"], filters);
+  addDateFieldConditions(
+    query,
+    ["sentAt", "updatedAt", "lastReplyAt"],
+    filters,
+  );
 
   if (filters.filteredNumberId && filters.filteredNumberId !== "all") {
     const sender = normalizeSenderFilterValue(filters.filteredNumberId);
@@ -2502,7 +2571,10 @@ async function listSenderReportRowsForCustomReport(filters = {}) {
       matchedNumberId: report.numberId || null,
       uploadFileName: upload.fileName || report.uploadFileName || "",
       uploadTemplateLabel:
-        upload.templateLabel || upload.templateName || report.templateName || "",
+        upload.templateLabel ||
+        upload.templateName ||
+        report.templateName ||
+        "",
       numberCurrentStatus: report.currentStatus || "",
       numberDeliveryStatus: report.deliveryStatus || "",
       sentMessage: getSentMessageForReport({ ...report, csvRowData }),
@@ -2527,7 +2599,8 @@ async function listSenderReportRowsForCustomReport(filters = {}) {
       filters.eventType !== "all" &&
       !(
         row.eventType === filters.eventType ||
-        (filters.eventType === "inbound" && (row.customReply || row.lastReplyAt))
+        (filters.eventType === "inbound" &&
+          (row.customReply || row.lastReplyAt))
       )
     ) {
       return false;
@@ -2846,12 +2919,16 @@ function stringifyResponseDetails(value) {
 async function getMatchedSentMessageForInboundWebhookEvent(event) {
   if (!event) return "";
 
-  const eventType = event.eventType || inferMsg91EventType(event.rawPayload || event);
+  const eventType =
+    event.eventType || inferMsg91EventType(event.rawPayload || event);
   if (eventType !== "inbound") return "";
 
   const normalizedMobile =
     formatPhoneForCall(
-      event.normalizedMobile || event.customerNumber || event.customer_number || "",
+      event.normalizedMobile ||
+        event.customerNumber ||
+        event.customer_number ||
+        "",
     ) ||
     formatPhoneForCall(
       String(
@@ -3755,7 +3832,7 @@ function reportItemMatchesUploadContext(normalized, upload) {
 async function applyReportItemsToUpload(
   upload,
   rawItems,
-  sourceLabel = "MSG91 report",
+  sourceLabel = "Delivery report",
 ) {
   const items = Array.isArray(rawItems) ? rawItems : [];
   const uploadRows = await mongoDb
@@ -3866,7 +3943,7 @@ async function requestLogsReportForUpload(upload) {
   const result = await applyReportItemsToUpload(
     upload,
     items,
-    "MSG91 WhatsApp logs",
+    "WhatsApp delivery logs",
   );
   await updateUploadFields(upload.id, {
     reportPollFailureCount: 0,
@@ -3876,7 +3953,7 @@ async function requestLogsReportForUpload(upload) {
   return {
     ...result,
     source: "logs",
-    message: `MSG91 logs refreshed. Updated ${result.updated} row(s), skipped ${result.skipped}.`,
+    message: `Delivery logs refreshed. Updated ${result.updated} row(s), skipped ${result.skipped}.`,
   };
 }
 
@@ -3884,7 +3961,7 @@ async function requestReportForUpload(upload, options = {}) {
   const { throwOnError = false } = options;
   if (!upload.apiMessageId || !upload.apiKey) {
     const message =
-      "This upload has no MSG91 message id/auth key yet. Send the campaign before refreshing server report data.";
+      "This upload has no message id/auth key yet. Send the campaign before refreshing server report data.";
     if (throwOnError) throw new Error(message);
     return { updated: 0, skipped: 0, message };
   }
@@ -3908,7 +3985,7 @@ async function requestReportForUpload(upload, options = {}) {
     const result = await applyReportItemsToUpload(
       upload,
       rawItems,
-      "MSG91 message report",
+      "WhatsApp message report",
     );
 
     await updateUploadFields(upload.id, {
@@ -3919,7 +3996,7 @@ async function requestReportForUpload(upload, options = {}) {
     return {
       ...result,
       source: "message-report",
-      message: `MSG91 server report refreshed. Updated ${result.updated} row(s), skipped ${result.skipped}.`,
+      message: `Delivery report refreshed. Updated ${result.updated} row(s), skipped ${result.skipped}.`,
     };
   } catch (error) {
     if (getHttpStatus(error) === 404 && upload.apiKey) {
@@ -3931,7 +4008,7 @@ async function requestReportForUpload(upload, options = {}) {
           const message =
             logsError.response?.data?.message ||
             logsError.message ||
-            "MSG91 logs refresh failed";
+            "Delivery logs refresh failed";
           throw new Error(message);
         }
         return {
@@ -3940,7 +4017,7 @@ async function requestReportForUpload(upload, options = {}) {
           error:
             logsError.response?.data?.message ||
             logsError.message ||
-            "MSG91 logs refresh failed",
+            "Delivery logs refresh failed",
         };
       }
     }
@@ -3949,7 +4026,7 @@ async function requestReportForUpload(upload, options = {}) {
       const message =
         error.response?.data?.message ||
         error.message ||
-        "MSG91 report refresh failed";
+        "Delivery report refresh failed";
       throw new Error(message);
     }
     return {
@@ -3958,7 +4035,7 @@ async function requestReportForUpload(upload, options = {}) {
       error:
         error.response?.data?.message ||
         error.message ||
-        "MSG91 report refresh failed",
+        "Delivery report refresh failed",
     };
   }
 }
@@ -3981,7 +4058,7 @@ async function handleReportPollFailure(upload, error) {
   ).toISOString();
   const message =
     status === 404
-      ? "MSG91 report API returned 404. Webhook capture remains active; polling will retry later."
+      ? "Report API returned 404. Webhook capture remains active; polling will retry later."
       : error.response?.data?.message || error.message || "Report poll failed";
 
   await updateUploadFields(upload.id, {
@@ -4050,13 +4127,15 @@ function getPdfSummaryHtml(rows, options = {}) {
   ).size;
 
   const replyCount = rows.filter(
-    (row) =>
-      row.eventType === "inbound" || row.customReply || row.lastReplyAt,
+    (row) => row.eventType === "inbound" || row.customReply || row.lastReplyAt,
   ).length;
 
   const isDelivered = (row) => {
     const status = String(
-      row.deliveryStatus || row.numberDeliveryStatus || row.normalizedStatus || "",
+      row.deliveryStatus ||
+        row.numberDeliveryStatus ||
+        row.normalizedStatus ||
+        "",
     ).toLowerCase();
     return (
       status.includes("deliver") ||
@@ -4067,7 +4146,10 @@ function getPdfSummaryHtml(rows, options = {}) {
 
   const isFailed = (row) => {
     const status = String(
-      row.deliveryStatus || row.numberDeliveryStatus || row.normalizedStatus || "",
+      row.deliveryStatus ||
+        row.numberDeliveryStatus ||
+        row.normalizedStatus ||
+        "",
     ).toLowerCase();
     return (
       status.includes("fail") ||
@@ -4082,18 +4164,18 @@ function getPdfSummaryHtml(rows, options = {}) {
   const failedCount = outboundRows.filter(isFailed).length;
   // Everything outbound that is neither a confirmed delivery nor a confirmed
   // failure - so Delivered + Pending + Failed always reconciles exactly to
-  // Total Communication Events.
+  // Total Customers / Sent Records.
   const pendingCount = outboundRows.length - deliveredCount - failedCount;
 
   const summaryRows = [
-    ["Report type", options.reportType || "MSG91 Webhook Report"],
+    ["Report type", options.reportType || "IPK Wealth Communications"],
     ["Date range", options.dateRange || "Webhook event range"],
-    ["Total Communication Events", String(outboundRows.length)],
-    ["Investors Communicated To", String(uniqueCustomers)],
-    ["Successfully Delivered to Investor", String(deliveredCount)],
-    ["Investor Acknowledgements", String(replyCount)],
-    ["Pending Delivery Confirmation", String(pendingCount)],
-    ["Delivery Failed - Action Required", String(failedCount)],
+    ["Total Customers", String(outboundRows.length)],
+    ["Unique Customer Mobiles", String(uniqueCustomers)],
+    ["Read", String(deliveredCount)],
+    ["Customer Replies", String(replyCount)],
+    ["Awaiting Delivery Update", String(pendingCount)],
+    ["Failed / Technical Issues", String(failedCount)],
   ];
 
   return `<table class="summary-table"><tbody>${summaryRows
@@ -4112,7 +4194,7 @@ function buildPdfHtmlDocument(title, summaryHtml, rowsHtml) {
 <meta charset="utf-8" />
 <title>${htmlEscapeForPdf(title)}</title>
 <style>
-  body { font-family: Arial, sans-serif; margin: 24px; color: #222; }
+  body { font-family: Helvetica, Arial, sans-serif; margin: 24px; color: #222; }
   .header { display: flex; align-items: center; margin-bottom: 24px; }
   .logo { width: 80px; height: auto; margin-right: 16px; }
   .header-text { display: flex; flex-direction: column; }
@@ -4176,7 +4258,10 @@ function getPdfRowsTableHtml(rows) {
   if (!rows || !rows.length) return "";
   const headers = Object.keys(rows[0]);
   const colgroupHtml = `<colgroup>${headers
-    .map((header) => `<col style="width:${PDF_ROW_TABLE_COLUMN_WIDTHS[header] || 8}%" />`)
+    .map(
+      (header) =>
+        `<col style="width:${PDF_ROW_TABLE_COLUMN_WIDTHS[header] || 8}%" />`,
+    )
     .join("")}</colgroup>`;
   const headerHtml = `<thead><tr>${headers
     .map((header) => `<th>${htmlEscapeForPdf(header)}</th>`)
@@ -4209,7 +4294,9 @@ async function renderPdfDocument(html, filenamePrefix, rowCount) {
     },
   });
 
-  await pdfWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+  await pdfWindow.loadURL(
+    `data:text/html;charset=utf-8,${encodeURIComponent(html)}`,
+  );
   const pdfData = await pdfWindow.webContents.printToPDF({
     printBackground: true,
     marginsType: 1,
@@ -4241,7 +4328,10 @@ function formatDateRangeForReport(filters, rows) {
   // No explicit filter window (e.g. a single upload's export) - fall back to
   // the actual earliest/latest event timestamps present in the report rows.
   const timestamps = rows
-    .map((row) => row.receivedAt || row.statusUpdatedAt || row.requestedAt || row.sentAt)
+    .map(
+      (row) =>
+        row.receivedAt || row.statusUpdatedAt || row.requestedAt || row.sentAt,
+    )
     .filter(Boolean)
     .map((value) => new Date(value).getTime())
     .filter((time) => !Number.isNaN(time));
@@ -4251,7 +4341,12 @@ function formatDateRangeForReport(filters, rows) {
   return minText === maxText ? minText : `${minText} to ${maxText}`;
 }
 
-function generatePdfFromRows(rows, filenamePrefix, isMultiSection = false, filters = {}) {
+function generatePdfFromRows(
+  rows,
+  filenamePrefix,
+  isMultiSection = false,
+  filters = {},
+) {
   const summaryHtml = getPdfSummaryHtml(rows, {
     reportType: "IPK Wealth Communications",
     dateRange: formatDateRangeForReport(filters, rows),
@@ -4280,7 +4375,8 @@ function generatePdfFromRows(rows, filenamePrefix, isMultiSection = false, filte
         row.rawPayload?.integratedNumber ||
         row.rawPayload?.integrated_number ||
         "",
-      "Template Name": getTemplateLabelForReport(row) ||
+      "Template Name":
+        getTemplateLabelForReport(row) ||
         row.rawPayload?.templateName ||
         row.rawPayload?.template_name ||
         row.rawPayload?.campaignName ||
@@ -4298,11 +4394,24 @@ function generatePdfFromRows(rows, filenamePrefix, isMultiSection = false, filte
         row.rawPayload?.requestId ||
         row.rawPayload?.request_id ||
         "",
-      "Event Type": row.eventType || row.rawPayload?.eventType || row.rawPayload?.event_type || "",
-      "Status": row.normalizedStatus || row.deliveryStatus || row.numberDeliveryStatus || row.rawPayload?.status || "",
+      "Event Type":
+        row.eventType ||
+        row.rawPayload?.eventType ||
+        row.rawPayload?.event_type ||
+        "",
+      Status:
+        row.normalizedStatus ||
+        row.deliveryStatus ||
+        row.numberDeliveryStatus ||
+        row.rawPayload?.status ||
+        "",
     })),
   );
-  const html = buildPdfHtmlDocument("IPK Wealth Communications", summaryHtml, rowsHtml);
+  const html = buildPdfHtmlDocument(
+    "IPK Wealth Communications",
+    summaryHtml,
+    rowsHtml,
+  );
   return renderPdfDocument(html, filenamePrefix, rows.length);
 }
 
@@ -4732,7 +4841,11 @@ ipcMain.handle("fetch-report", async (event, uploadId) => {
     // byNumberId: events whose matchedNumberId = this row (written back by EC2 server).
     // byMobile is no longer used because it caused wrong replies from other uploads to show.
     const inboundEvents = inboundReplyMap.byNumberId.get(numberId) || [];
-    const mergedReply = mergeReportReplyFields(row, senderReport, inboundEvents);
+    const mergedReply = mergeReportReplyFields(
+      row,
+      senderReport,
+      inboundEvents,
+    );
 
     return {
       ...uploadMeta,
@@ -4841,11 +4954,26 @@ ipcMain.handle("export-custom-report", async (event, filters = {}) => {
 });
 
 ipcMain.handle("schedule-set", async (event, cfg = {}) => {
+  if (!REPORT_SCHEDULER_ENABLED) {
+    clearScheduleTimer();
+    scheduleConfig = {
+      enabled: false,
+      time: cfg.time || "10:00",
+      mechanism: cfg.mechanism || "export",
+    };
+    saveScheduleConfig(scheduleConfig);
+    return scheduleConfig;
+  }
+  const requestedMechanism = cfg.mechanism || "export";
+  const mechanism =
+    requestedMechanism === "email" && !EMAIL_NOTIFICATIONS_ENABLED
+      ? "export"
+      : requestedMechanism;
   // validate cfg minimally
   scheduleConfig = {
     enabled: Boolean(cfg.enabled),
     time: cfg.time || "10:00",
-    mechanism: cfg.mechanism || "email",
+    mechanism,
   };
   saveScheduleConfig(scheduleConfig);
   scheduleNextRun(scheduleConfig);
@@ -4853,18 +4981,35 @@ ipcMain.handle("schedule-set", async (event, cfg = {}) => {
 });
 
 ipcMain.handle("schedule-get", async () => {
+  if (!REPORT_SCHEDULER_ENABLED) {
+    clearScheduleTimer();
+    return { enabled: false, time: "10:00", mechanism: "export" };
+  }
   if (!scheduleConfig) scheduleConfig = loadScheduleConfig();
-  return scheduleConfig || { enabled: false, time: "10:00", mechanism: "email" };
+  if (scheduleConfig?.mechanism === "email" && !EMAIL_NOTIFICATIONS_ENABLED) {
+    scheduleConfig = { ...scheduleConfig, enabled: false, mechanism: "export" };
+  }
+  return (
+    scheduleConfig || { enabled: false, time: "10:00", mechanism: "export" }
+  );
 });
 
 ipcMain.handle("schedule-run-now", async () => {
   try {
+    if (!REPORT_SCHEDULER_ENABLED) {
+      return { success: false, disabled: true };
+    }
     const cfg = scheduleConfig ||
       loadScheduleConfig() || {
         enabled: false,
         time: "10:00",
-        mechanism: "email",
+        mechanism: "export",
       };
+    if (cfg && cfg.mechanism === "email" && !EMAIL_NOTIFICATIONS_ENABLED) {
+      console.log("Email notifications are disabled. Running export instead.");
+      const res = await exportCustomReport({});
+      return { success: true, emailDisabled: true, export: res };
+    }
     if (cfg && cfg.mechanism === "email") {
       console.log(
         "Manual trigger for schedule-run-now starting (Email flow with 24-hour RM/Admin split)...",
@@ -4899,6 +5044,9 @@ ipcMain.handle("schedule-run-now", async () => {
 
 ipcMain.handle("send-admin-report-email", async (event, filters = {}) => {
   console.log("IPC send-admin-report-email triggered with filters:", filters);
+  if (!EMAIL_NOTIFICATIONS_ENABLED) {
+    return { skipped: true, disabled: true, sent: 0 };
+  }
   const rows = await getCustomReportRows(filters);
   if (!rows.length) {
     throw new Error("No transactions found for the selected filter range.");
@@ -4913,6 +5061,9 @@ ipcMain.handle("send-admin-report-email", async (event, filters = {}) => {
 
 ipcMain.handle("send-rm-reports", async (event, filters = {}) => {
   console.log("IPC send-rm-reports triggered with filters:", filters);
+  if (!EMAIL_NOTIFICATIONS_ENABLED) {
+    return { skipped: true, disabled: true, count: 0, sent: 0 };
+  }
   return sendRmGroupedReportsDirect(filters);
 });
 
@@ -5068,7 +5219,11 @@ async function listSelectedUploadReportRows(filters = {}) {
       senderReportMap.byMobile.get(mobile) ||
       null;
     const inboundEvents = inboundReplyMap.byNumberId.get(numberId) || [];
-    const mergedReply = mergeReportReplyFields(row, senderReport, inboundEvents);
+    const mergedReply = mergeReportReplyFields(
+      row,
+      senderReport,
+      inboundEvents,
+    );
     const latestReplyText =
       mergedReply.customReply ||
       getReplyTextFromHistory(mergedReply.replyHistory);
@@ -5213,19 +5368,21 @@ async function getCustomReportRows(filters = {}) {
   const rows = filters.uploadId
     ? await listSelectedUploadReportRows(filters)
     : await listSenderReportRowsForCustomReport(filters);
-  return rows.map((row) => ({
-    ...row,
-    rawPayload: parseJsonField(row.rawPayload, {}),
-    csvRowData: parseJsonField(row.csvRowData, {}),
-  })).sort((a, b) => {
-    const aTime = new Date(
-      a.receivedAt || a.statusUpdatedAt || a.requestedAt || 0,
-    ).getTime();
-    const bTime = new Date(
-      b.receivedAt || b.statusUpdatedAt || b.requestedAt || 0,
-    ).getTime();
-    return bTime - aTime;
-  });
+  return rows
+    .map((row) => ({
+      ...row,
+      rawPayload: parseJsonField(row.rawPayload, {}),
+      csvRowData: parseJsonField(row.csvRowData, {}),
+    }))
+    .sort((a, b) => {
+      const aTime = new Date(
+        a.receivedAt || a.statusUpdatedAt || a.requestedAt || 0,
+      ).getTime();
+      const bTime = new Date(
+        b.receivedAt || b.statusUpdatedAt || b.requestedAt || 0,
+      ).getTime();
+      return bTime - aTime;
+    });
 }
 
 function getSafeSheetName(label) {
@@ -5261,13 +5418,17 @@ function getRowFieldValue(row, candidates = []) {
   const normalizedValues = new Map();
   Object.entries(data).forEach(([key, value]) => {
     normalizedValues.set(
-      String(key).toLowerCase().replace(/[^a-z0-9]+/g, ""),
+      String(key)
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ""),
       value,
     );
   });
 
   for (const candidate of candidates) {
-    const key = String(candidate).toLowerCase().replace(/[^a-z0-9]+/g, "");
+    const key = String(candidate)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "");
     const value = normalizedValues.get(key);
     if (value !== undefined && value !== null && String(value).trim()) {
       return String(value).trim();
@@ -5343,11 +5504,23 @@ function getDateTimeForReport(row) {
 function getSentMessageForReport(row) {
   if (row.sentMessage) return row.sentMessage;
   const parts = [
-    ["Stock Name", getRowFieldValue(row, ["Stock Name", "Stock", "Scrip", "Symbol"])],
-    ["Client Name", getRowFieldValue(row, ["Client Name", "Customer Name", "Name", "Client"])],
+    [
+      "Stock Name",
+      getRowFieldValue(row, ["Stock Name", "Stock", "Scrip", "Symbol"]),
+    ],
+    [
+      "Client Name",
+      getRowFieldValue(row, ["Client Name", "Customer Name", "Name", "Client"]),
+    ],
     ["Price", getRowFieldValue(row, ["Price", "PRICE", "Rate"])],
-    ["Client Code", getRowFieldValue(row, ["Client Code", "ClientCode", "Code"])],
-    ["Order Type", getRowFieldValue(row, ["Order Type", "OrderType", "Buy/Sell", "Side"])],
+    [
+      "Client Code",
+      getRowFieldValue(row, ["Client Code", "ClientCode", "Code"]),
+    ],
+    [
+      "Order Type",
+      getRowFieldValue(row, ["Order Type", "OrderType", "Buy/Sell", "Side"]),
+    ],
     ["Qty", getRowFieldValue(row, ["Qty", "QTY", "Quantity"])],
   ].filter(([, value]) => value);
   return parts.map(([label, value]) => `${label}: ${value}`).join(" | ");
@@ -5424,11 +5597,15 @@ function getReportReplyTime(row) {
 }
 
 function getDeliveryStatusPartsForReport(row) {
-  const sentStatus = String(getSentDeliveryStatusForReport(row) || "").toLowerCase();
+  const sentStatus = String(
+    getSentDeliveryStatusForReport(row) || "",
+  ).toLowerCase();
   const sentAt = formatDateTimeForReport(
     row.requestedAt || row.sentAt || row.receivedAt || row.statusUpdatedAt,
   );
-  const statusAt = formatDateTimeForReport(row.statusUpdatedAt || row.updatedAt || row.receivedAt);
+  const statusAt = formatDateTimeForReport(
+    row.statusUpdatedAt || row.updatedAt || row.receivedAt,
+  );
   const replyAt = getReportReplyTime(row);
   const sentLines = [];
 
@@ -5464,7 +5641,9 @@ function getDeliveryStatusHtmlForReport(row) {
   if (!sentLines.length && !replyLine) return "-";
 
   const sentHtml = sentLines
-    .map((line) => `<div class="pdf-status-line">${htmlEscapeForPdf(line)}</div>`)
+    .map(
+      (line) => `<div class="pdf-status-line">${htmlEscapeForPdf(line)}</div>`,
+    )
     .join("");
   const replyHtml = replyLine
     ? `<div class="pdf-status-line pdf-status-reply">${htmlEscapeForPdf(replyLine)}</div>`
@@ -5474,7 +5653,8 @@ function getDeliveryStatusHtmlForReport(row) {
 }
 
 function getReceivedMessageForReport(row) {
-  const hasReply = row.eventType === "inbound" || row.customReply || row.lastReplyAt;
+  const hasReply =
+    row.eventType === "inbound" || row.customReply || row.lastReplyAt;
   if (!hasReply) return "";
   return (
     row.customReply ||
@@ -5491,13 +5671,14 @@ function getReceivedMessageForReport(row) {
 function formatSingleRowForExcel(row, index) {
   return {
     "S.No.": index + 1,
-    "Date & Time": formatDateTimeForReport(row.receivedAt || row.statusUpdatedAt || row.requestedAt),
+    "Date & Time": formatDateTimeForReport(
+      row.receivedAt || row.statusUpdatedAt || row.requestedAt,
+    ),
     "Customer Name": getCustomerNameForReport(row),
     "Customer Mobile": row.normalizedMobile || row.customerNumber || "",
     "Sent From": row.integratedNumber || row.integrated_number || "",
     "Delivery Status": getDeliveryStatusLinesForReport(row),
-    Message:
-      `Sent: ${getSentMessageForReport(row) || "-"}\nReceived: ${getReceivedMessageForReport(row) || "-"}`,
+    Message: `Sent: ${getSentMessageForReport(row) || "-"}\nReceived: ${getReceivedMessageForReport(row) || "-"}`,
     Type: row.eventType === "inbound" ? "Reply event" : "Sent record",
     Status: row.normalizedStatus || "",
     "Message Status": row.numberCurrentStatus || "",
@@ -5554,13 +5735,15 @@ function generateExcelFromRows(rows, filenamePrefix, isMultiSheet = false) {
 
     // Collate any unmatched transactions by template too, so nothing is lost.
     const unmatchedRows = rows.filter((row) => !matchedRows.has(row));
-    groupRowsByTemplate(unmatchedRows).forEach((templateRows, templateLabel) => {
-      appendReportWorksheet(
-        workbook,
-        `Other - ${templateLabel}`,
-        templateRows,
-      );
-    });
+    groupRowsByTemplate(unmatchedRows).forEach(
+      (templateRows, templateLabel) => {
+        appendReportWorksheet(
+          workbook,
+          `Other - ${templateLabel}`,
+          templateRows,
+        );
+      },
+    );
 
     // Fallback sheet if absolutely nothing was matched or appended
     if (workbook.SheetNames.length === 0) {
@@ -5584,7 +5767,12 @@ async function exportCustomReport(filters = {}) {
   if (!rows.length) {
     throw new Error("No webhook report rows to export.");
   }
-  return generatePdfFromRows(rows, "msg91-webhook-report", !filters.uploadId, filters); // selected upload uses a direct single-section report
+  return generatePdfFromRows(
+    rows,
+    "msg91-webhook-report",
+    !filters.uploadId,
+    filters,
+  ); // selected upload uses a direct single-section report
 }
 
 ipcMain.handle("get-msg91-config", async () => {
@@ -5629,12 +5817,12 @@ ipcMain.handle("get-msg91-config", async () => {
 
   if (!config.authKey || !senderNumber?.number) {
     throw new Error(
-      "MSG91 auth key and sender number must be configured and selected.",
+      "The messaging auth key and sender number must be configured and selected.",
     );
   }
 
   if (!template) {
-    throw new Error("Select a configured MSG91 template before sending.");
+    throw new Error("Select a configured template before sending.");
   }
 
   const webhookBaseUrl = assertPublicWebhookConfigured();
@@ -5791,7 +5979,7 @@ ipcMain.handle("get-msg91-config", async () => {
   await updateUploadStatus(uploadId);
   sendStateUpdate();
   return {
-    message: `${validRows.length} message(s) sent to MSG91.`,
+    message: `${validRows.length} message(s) sent.`,
     apiMessageId,
     responseData,
   };
@@ -5854,12 +6042,12 @@ ipcMain.handle("send-messages", async (event, options) => {
 
   if (!config.authKey || !senderNumber?.number) {
     throw new Error(
-      "MSG91 auth key and sender number must be configured and selected.",
+      "The messaging auth key and sender number must be configured and selected.",
     );
   }
 
   if (!template) {
-    throw new Error("Select a configured MSG91 template before sending.");
+    throw new Error("Select a configured template before sending.");
   }
 
   const webhookBaseUrl = assertPublicWebhookConfigured();
@@ -6015,7 +6203,7 @@ ipcMain.handle("send-messages", async (event, options) => {
   sendStateUpdate();
 
   return {
-    message: `${validRows.length} message(s) sent to MSG91.`,
+    message: `${validRows.length} message(s) sent.`,
     apiStatusCode: response.status,
     apiStatusText: response.statusText,
     apiMessageId,
@@ -6039,7 +6227,7 @@ ipcMain.handle("retry-failed", async (event, uploadId) => {
   );
   if (!config.authKey || !senderNumber?.number || !template) {
     throw new Error(
-      "Cannot retry until MSG91 auth, integrated number, and the original template are configured.",
+      "Cannot retry until the auth key, integrated number, and the original template are configured.",
     );
   }
   const webhookBaseUrl = assertPublicWebhookConfigured();
@@ -6251,14 +6439,19 @@ async function clearYesterdayUploadsCache() {
         storages: ["localstorage", "indexdb", "serviceworkers", "cachestorage"],
       });
     }
-    console.log(`[Cache] Cleared yesterday's upload caches at ${nowIST().toISOString()} IST`);
+    console.log(
+      `[Cache] Cleared yesterday's upload caches at ${nowIST().toISOString()} IST`,
+    );
   } catch (err) {
     console.warn("[Cache] Daily cache clear failed:", err.message);
   }
 }
 
 function scheduleDailyCacheClean() {
-  if (dailyCacheTimer) { clearTimeout(dailyCacheTimer); dailyCacheTimer = null; }
+  if (dailyCacheTimer) {
+    clearTimeout(dailyCacheTimer);
+    dailyCacheTimer = null;
+  }
   // Schedule next midnight IST (00:00 IST)
   const ms = msUntilNextIST(0, 0);
   dailyCacheTimer = setTimeout(async function runCacheClean() {
@@ -6267,7 +6460,9 @@ function scheduleDailyCacheClean() {
     dailyCacheTimer = setTimeout(runCacheClean, msUntilNextIST(0, 0));
   }, ms);
   const nextMidnightIST = new Date(Date.now() + ms);
-  console.log(`[Cache] Daily cache clean scheduled at ${nextMidnightIST.toISOString()} UTC (midnight IST)`);
+  console.log(
+    `[Cache] Daily cache clean scheduled at ${nextMidnightIST.toISOString()} UTC (midnight IST)`,
+  );
 }
 
 app.whenReady().then(async () => {
@@ -6295,7 +6490,7 @@ app.whenReady().then(async () => {
           "Initialized default schedule config (disabled) on first-time launch.",
         );
       }
-      if (scheduleConfig && scheduleConfig.enabled)
+      if (REPORT_SCHEDULER_ENABLED && scheduleConfig && scheduleConfig.enabled)
         scheduleNextRun(scheduleConfig);
     } catch (err) {
       console.warn("Failed to initialize schedule:", err.message);

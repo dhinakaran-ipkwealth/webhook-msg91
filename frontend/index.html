@@ -6,6 +6,7 @@
     <title>MSG91 Webhook Console</title>
     <style>
       :root {
+        --font-sans: Helvetica, Arial, sans-serif;
         --bg: #f6f8fb;
         --panel: #ffffff;
         --line: #dbe3ef;
@@ -28,7 +29,7 @@
         min-height: 100vh;
         background: var(--bg);
         color: var(--text);
-        font-family: "Segoe UI", Arial, sans-serif;
+        font-family: var(--font-sans);
       }
 
       .app-layout {
@@ -316,7 +317,7 @@
         white-space: nowrap;
       }
 
-      .mobile-pill { background: #eef2f7; font-family: Consolas, monospace; }
+      .mobile-pill { background: #eef2f7; font-family: var(--font-sans); }
       .template-tag { background: var(--primary-soft); color: #174ea6; }
       .badge-pending, .status-new { background: var(--warn-soft); color: var(--warn); }
       .badge-sent, .status-sent, .status-reporting { background: var(--primary-soft); color: #174ea6; }
@@ -405,7 +406,7 @@
         border: 1px solid var(--line);
         border-radius: 6px;
         padding: 8px;
-        font-family: Consolas, monospace;
+        font-family: var(--font-sans);
         font-size: 12px;
       }
 
@@ -644,8 +645,8 @@
             </div>
             <div class="field-row">
               <button id="deliveryReportExport" class="secondary-button">Export PDF</button>
-              <button id="deliveryReportEmailAdmin" class="secondary-button">Email Admin Report</button>
-              <button id="deliveryReportEmailRMs" class="secondary-button">Email RM Reports</button>
+              <button id="deliveryReportEmailAdmin" class="secondary-button" disabled title="Email notifications are currently disabled.">Email Disabled</button>
+              <button id="deliveryReportEmailRMs" class="secondary-button" disabled title="Email notifications are currently disabled.">RM Email Disabled</button>
             </div>
             <div class="delivery-note">Replies are read from `whatsapp_sender_reports`, `whatsapp_numbers`, and `whatsapp_webhook_events` written by the EC2 PM2 webhook service.</div>
             <div class="table-wrap">
@@ -674,9 +675,9 @@
               <input id="customSearch" type="text" placeholder="Search mobile, request, reply" />
               <button id="customReportRefresh">Refresh Report</button>
               <button id="customReportExport" class="secondary-button">Export PDF</button>
-              <button id="customReportEmailAdmin" class="secondary-button">Email Admin Report</button>
-              <button id="customReportEmailRMs" class="secondary-button">Email RM Reports</button>
-              <button id="customReportSchedule" class="secondary-button">Schedule</button>
+              <button id="customReportEmailAdmin" class="secondary-button" disabled title="Email notifications are currently disabled.">Email Disabled</button>
+              <button id="customReportEmailRMs" class="secondary-button" disabled title="Email notifications are currently disabled.">RM Email Disabled</button>
+              <button id="customReportSchedule" class="secondary-button" style="display: none;" hidden disabled>Schedule</button>
             </div>
 
               <input id="customStartDateTime" type="hidden" />
@@ -697,12 +698,12 @@
       </main>
     </div>
 
-    <div id="schedulePanel" class="modal-backdrop" aria-hidden="true">
+    <div id="schedulePanel" class="modal-backdrop" aria-hidden="true" hidden>
       <div class="modal">
         <h3>Scheduled Report</h3>
         <div class="field-row"><label>Enabled</label><input id="scheduleEnabled" type="checkbox" /></div>
         <div class="field-row"><label>Time</label><input id="scheduleTime" type="time" value="10:00" /></div>
-        <div class="field-row"><label>Mechanism</label><select id="scheduleMechanism"><option value="email">Email</option><option value="export">Export file</option><option value="sftp">SFTP</option></select></div>
+        <div class="field-row"><label>Mechanism</label><select id="scheduleMechanism"><option value="email" disabled>Email disabled</option><option value="export" selected>Export file</option><option value="sftp">SFTP</option></select></div>
         <div class="field-row">
           <button id="scheduleSave">Save</button>
           <button id="scheduleRunNow" class="secondary-button">Run Now</button>

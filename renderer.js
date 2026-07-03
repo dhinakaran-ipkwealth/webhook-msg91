@@ -74,6 +74,7 @@ const scheduleMechanism = document.getElementById("scheduleMechanism");
 const scheduleSave = document.getElementById("scheduleSave");
 const scheduleRunNow = document.getElementById("scheduleRunNow");
 const scheduleClose = document.getElementById("scheduleClose");
+const REPORT_SCHEDULER_ENABLED = false;
 const customReportSummary = document.getElementById("customReportSummary");
 const customReportSummaryGrid = document.getElementById(
   "customReportSummaryGrid",
@@ -102,6 +103,7 @@ let selectedUploadValidation = { total: 0, valid: 0, invalid: 0 };
 let refreshInProgress = false;
 let customReportRefreshInProgress = false;
 let customFiltersTouched = false;
+const EMAIL_NOTIFICATIONS_ENABLED = false;
 const mediaComponentTypes = new Set([
   "image",
   "video",
@@ -111,6 +113,29 @@ const mediaComponentTypes = new Set([
 ]);
 
 const JSON_ICON_SVG = `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3" stroke="currentColor" stroke-width="1.2" fill="transparent"/><path d="M9 8s1-1 2 0-1 2-1 2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M15 16s-1 1-2 0 1-2 1-2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
+function disableEmailControls() {
+  if (EMAIL_NOTIFICATIONS_ENABLED) return;
+  [
+    deliveryReportEmailAdmin,
+    deliveryReportEmailRMs,
+    customReportEmailAdmin,
+    customReportEmailRMs,
+  ].forEach((button) => {
+    if (!button) return;
+    button.disabled = true;
+    button.title = "Email notifications are currently disabled.";
+  });
+
+  if (scheduleMechanism) {
+    [...scheduleMechanism.options].forEach((option) => {
+      if (option.value === "email") option.disabled = true;
+    });
+    if (scheduleMechanism.value === "email") scheduleMechanism.value = "export";
+  }
+}
+
+disableEmailControls();
 
 function getStatusClass(status) {
   if (!status) return "status-new";
@@ -216,7 +241,7 @@ sendButton.addEventListener("click", async () => {
 
   const integratedNumberId = numberSelect.value;
   if (!integratedNumberId) {
-    showAlert("Select a MSG91 sender number first.", "warning");
+    showAlert("Select a sender number first.", "warning");
     return;
   }
 
@@ -344,6 +369,10 @@ if (deliveryReportExport)
 
 if (deliveryReportEmailAdmin)
   deliveryReportEmailAdmin.addEventListener("click", async () => {
+    if (!EMAIL_NOTIFICATIONS_ENABLED) {
+      showAlert("Email notifications are currently disabled.", "info");
+      return;
+    }
     if (!selectedUploadId) {
       showAlert("Select an upload first before sending the admin report.", "warning");
       return;
@@ -373,6 +402,10 @@ if (deliveryReportEmailAdmin)
 
 if (deliveryReportEmailRMs)
   deliveryReportEmailRMs.addEventListener("click", async () => {
+    if (!EMAIL_NOTIFICATIONS_ENABLED) {
+      showAlert("Email notifications are currently disabled.", "info");
+      return;
+    }
     if (!selectedUploadId) {
       showAlert("Select an upload first before sending RM reports.", "warning");
       return;
@@ -460,6 +493,10 @@ customReportExport.addEventListener("click", exportCustomReportPdf);
 
 if (customReportEmailAdmin)
   customReportEmailAdmin.addEventListener("click", async () => {
+    if (!EMAIL_NOTIFICATIONS_ENABLED) {
+      showAlert("Email notifications are currently disabled.", "info");
+      return;
+    }
     const dateDisplay = customDateTimeDisplay?.value || "current filter range";
     if (
       !confirm(
@@ -486,6 +523,10 @@ if (customReportEmailAdmin)
 
 if (customReportEmailRMs)
   customReportEmailRMs.addEventListener("click", async () => {
+    if (!EMAIL_NOTIFICATIONS_ENABLED) {
+      showAlert("Email notifications are currently disabled.", "info");
+      return;
+    }
     const dateDisplay = customDateTimeDisplay?.value || "current filter range";
     if (
       !confirm(
@@ -510,7 +551,13 @@ if (customReportEmailRMs)
     }
   });
 // Schedule panel handlers
-if (customReportSchedule && schedulePanel) {
+if (!REPORT_SCHEDULER_ENABLED) {
+  if (customReportSchedule) {
+    customReportSchedule.hidden = true;
+    customReportSchedule.disabled = true;
+  }
+  if (schedulePanel) schedulePanel.hidden = true;
+} else if (customReportSchedule && schedulePanel) {
   customReportSchedule.addEventListener("click", () => {
     schedulePanel.setAttribute("aria-hidden", "false");
   });
@@ -526,7 +573,10 @@ if (scheduleSave) {
     const cfg = {
       enabled: Boolean(scheduleEnabled.checked),
       time: scheduleTime.value || "10:00",
-      mechanism: scheduleMechanism.value || "email",
+      mechanism:
+        !EMAIL_NOTIFICATIONS_ENABLED && scheduleMechanism.value === "email"
+          ? "export"
+          : scheduleMechanism.value || "export",
     };
     try {
       await window.electronAPI.scheduleSet(cfg);
@@ -542,7 +592,7 @@ if (scheduleRunNow)
   scheduleRunNow.addEventListener("click", async () => {
     if (
       !confirm(
-        "Run the scheduled report now?\n\nThis will send Admin Report and RM Reports emails immediately (24-hour window ending now).\n\nClick OK to send.",
+        "Run the scheduled report now?\n\nEmail notifications are disabled, so this will generate/export the report only.\n\nClick OK to continue.",
       )
     )
       return;
@@ -550,7 +600,7 @@ if (scheduleRunNow)
       scheduleRunNow.disabled = true;
       scheduleRunNow.textContent = "Running...";
       await window.electronAPI.scheduleRunNow();
-      showAlert("Scheduled report sent successfully.", "success");
+      showAlert("Scheduled report generated successfully.", "success");
     } catch (err) {
       showAlert(`Scheduled report failed: ${err.message}`, "error");
     } finally {
@@ -560,12 +610,18 @@ if (scheduleRunNow)
   });
 
 // initialize schedule config on load (from main process)
-window.electronAPI.scheduleGet().then((cfg) => {
-  if (!cfg) return;
-  scheduleEnabled.checked = Boolean(cfg.enabled);
-  scheduleTime.value = cfg.time || "10:00";
-  scheduleMechanism.value = cfg.mechanism || "email";
-});
+if (REPORT_SCHEDULER_ENABLED) {
+  window.electronAPI.scheduleGet().then((cfg) => {
+    if (!cfg) return;
+    scheduleEnabled.checked = Boolean(cfg.enabled);
+    scheduleTime.value = cfg.time || "10:00";
+    scheduleMechanism.value =
+      !EMAIL_NOTIFICATIONS_ENABLED && cfg.mechanism === "email"
+        ? "export"
+        : cfg.mechanism || "export";
+    disableEmailControls();
+  });
+}
 customScope.addEventListener("change", () => {
   customFiltersTouched = true;
   refreshCustomReport();
@@ -769,8 +825,8 @@ function formatMsg91SendAlert(result = {}) {
   const statusLabel = statusCode
     ? `${statusCode}${statusText ? ` ${statusText}` : ""}`
     : "success";
-  const detail = result.message || "Message request sent to MSG91.";
-  return `MSG91 accepted the template send with HTTP ${statusLabel}.\n${detail}`;
+  const detail = result.message || "Message request sent.";
+  return `The template send was accepted with HTTP ${statusLabel}.\n${detail}`;
 }
 
 function parseStoredRowData(row) {
@@ -1302,12 +1358,12 @@ async function loadMsg91Config() {
       ? "MongoDB configured, connection pending"
       : "MongoDB not configured";
   const webhookText = msg91Config.webhookIsLocalOnly
-    ? "Webhook is local only; MSG91 cannot send replies to this PC until WEBHOOK_PUBLIC_BASE_URL is set to a public HTTPS URL"
+    ? "Webhook is local only; replies cannot reach this PC until WEBHOOK_PUBLIC_BASE_URL is set to a public HTTPS URL"
     : `Webhook public URL: ${msg91Config.webhookUrl || "configured"}`;
   const reportSourceText = msg91Config.reportPollingEnabled
-    ? "MSG91 report API polling enabled"
+    ? "Delivery report API polling enabled"
     : "Reports/replies sync from CRM webhook MongoDB";
-  configStatus.textContent = `MSG91 configuration: ${configuredText}. ${numberText}. ${templateText}. ${mongoText}. ${webhookText}. ${reportSourceText}.`;
+  configStatus.textContent = `Messaging configuration: ${configuredText}. ${numberText}. ${templateText}. ${mongoText}. ${webhookText}. ${reportSourceText}.`;
   renderMappingTable();
 }
 
@@ -1371,7 +1427,6 @@ function renderUploadTable(uploads) {
       <td>${triggeredAt}</td>
       <td>
         <button class="small-button" data-upload-id="${upload.id}" title="Open this upload in the delivery report">Select</button>
-        <button class="small-button secondary-button" data-export-id="${upload.id}" title="Download PDF for this upload">Export PDF</button>
         ${retryButton}
       </td>
     `;
@@ -1381,9 +1436,7 @@ function renderUploadTable(uploads) {
   uploadTableBody.querySelectorAll("button").forEach((button) => {
     button.addEventListener("click", async (event) => {
       const uploadId = Number(
-        event.target.dataset.uploadId ||
-          event.target.dataset.retryId ||
-          event.target.dataset.exportId,
+        event.target.dataset.uploadId || event.target.dataset.retryId,
       );
       if (event.target.dataset.uploadId) {
         selectedUploadId = uploadId;
@@ -1407,17 +1460,6 @@ function renderUploadTable(uploads) {
           await refreshUploads();
         } catch (err) {
           showAlert(`Retry failed: ${err.message}`, "error");
-        }
-      }
-      if (event.target.dataset.exportId) {
-        try {
-          const result = await window.electronAPI.exportUploadReport(uploadId);
-          showAlert(
-            `PDF report exported with ${result.rowCount} rows:\n${result.filePath}`,
-            "success",
-          );
-        } catch (err) {
-          showAlert(`Export failed: ${err.message}`, "error");
         }
       }
     });
@@ -1449,7 +1491,7 @@ function displayPreview(rows) {
     const foreignCount = getSplitRows("foreign").length;
     const validCount = selectedUploadValidation.valid;
     const invalidCount = selectedUploadValidation.invalid;
-    previewSummary.textContent = `Validation complete: ${validCount} valid and ${invalidCount} invalid out of ${count} rows. Only valid numbers can be sent through MSG91.`;
+    previewSummary.textContent = `Validation complete: ${validCount} valid and ${invalidCount} invalid out of ${count} rows. Only valid numbers can be sent.`;
 
     if (!previewTableBody) {
       console.warn("previewTableBody element not found in DOM");
@@ -1685,6 +1727,19 @@ function getLocalDatetimeForInput(date = new Date()) {
   )}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+function getLocalDateForInput(date = new Date()) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(
+    date.getDate(),
+  )}`;
+}
+
+function localDatetimeInputToIso(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
 function getReportRangeForPreset(preset) {
   const now = new Date();
   const start = new Date(now);
@@ -1767,9 +1822,9 @@ function openDateTimePicker() {
       ? new Date(customEndDateTime.value)
       : new Date(startValue);
 
-  customStartDateInput.value = startValue.toISOString().slice(0, 10);
+  customStartDateInput.value = getLocalDateForInput(startValue);
   customStartTimeInput.value = `${String(startValue.getHours()).padStart(2, "0")}:${String(startValue.getMinutes()).padStart(2, "0")}`;
-  customEndDateInput.value = endValue.toISOString().slice(0, 10);
+  customEndDateInput.value = getLocalDateForInput(endValue);
   customEndTimeInput.value = `${String(endValue.getHours()).padStart(2, "0")}:${String(endValue.getMinutes()).padStart(2, "0")}`;
 
   dateTimePickerBackdrop.classList.add("show");
@@ -1797,8 +1852,8 @@ function getCustomReportFilters() {
       templateName && templateName !== "all"
         ? customTemplateFilter.value
         : null,
-    startDateTime: customStartDateTime.value || null,
-    endDateTime: customEndDateTime.value || null,
+    startDateTime: localDatetimeInputToIso(customStartDateTime.value),
+    endDateTime: localDatetimeInputToIso(customEndDateTime.value),
     eventType: customEventType.value,
     status: customStatus.value,
     search: customSearch.value.trim(),
@@ -2100,7 +2155,7 @@ function getFriendlyStatus(row) {
   if (row.eventType === "inbound") return "Customer replied";
   if (row.normalizedStatus === "delivered") return "Delivered / read";
   if (row.normalizedStatus === "failed") return "Failed";
-  if (row.normalizedStatus === "sent") return "Sent to MSG91";
+  if (row.normalizedStatus === "sent") return "Sent";
   return row.normalizedStatus || "In progress";
 }
 
@@ -2205,10 +2260,11 @@ function formatPercent(value, total) {
 }
 
 function renderCustomSummary(rows) {
-  // Outbound rows are the actual dispatched communications. Inbound rows are
-  // the investor's replies to those communications - a separate dimension -
-  // so they're excluded from the outbound status buckets below to avoid
-  // double-counting the same investor interaction in two cards.
+  // Use one consistent basis for the dashboard:
+  // outbound rows are the sent customer records in this report. MSG91 delivery
+  // status cards below are mutually exclusive and must reconcile to this total.
+  // Customer replies are shown separately as acknowledgement evidence because
+  // a reply can overlap with a sent/delivered/pending status.
   const outboundRows = rows.filter((row) => row.eventType !== "inbound");
   const uniqueCustomers = new Set(
     outboundRows.map(getCustomerKey).filter(Boolean),
@@ -2242,7 +2298,7 @@ function renderCustomSummary(rows) {
   const failed = outboundRows.filter(isFailed).length;
   // Everything outbound that is neither a confirmed delivery nor a confirmed
   // failure - covers "sent"/"queued"/blank status - so Delivered + Pending +
-  // Failed always reconciles exactly to Total Communication Events.
+  // Failed always reconciles exactly to Total Customers / Sent Records.
   const pending = outboundRows.length - delivered - failed;
 
   const counts = {
@@ -2256,37 +2312,37 @@ function renderCustomSummary(rows) {
 
   const cards = [
     {
-      label: "Total Communication Events",
+      label: "Total Customers",
       value: counts.total,
-      note: "Dispatched messages tracked in this view (Delivered + Pending + Failed).",
+      note: "Base count for this report. Delivered + Pending + Failed equals this number.",
     },
     {
-      label: "Investors Communicated To",
+      label: "Unique Customer Mobiles",
       value: counts.uniqueCustomers,
-      note: "Unique investor mobile numbers that received a communication in this view.",
+      note: "Distinct customer mobile numbers in the same sent records.",
     },
     {
-      label: "Successfully Delivered to Investor",
+      label: "Delivered / Read",
       value: counts.delivered,
-      note: "Communications confirmed delivered, read, or success by MSG91.",
+      note: "MSG91 confirmed delivered, read, or success.",
       tone: "good",
     },
     {
-      label: "Investor Acknowledgements",
+      label: "Customer Replies",
       value: counts.replyEvents,
-      note: "Communications with an inbound investor reply as evidence of acknowledgement.",
+      note: "Subset of sent records with inbound customer reply evidence.",
       tone: "reply",
     },
     {
-      label: "Pending Delivery Confirmation",
+      label: "Awaiting Delivery Update",
       value: counts.pending,
-      note: "Dispatched to MSG91, awaiting a delivered/read/failed callback.",
+      note: "Sent to MSG91, waiting for delivered/read/failed callback.",
       tone: "pending",
     },
     {
-      label: "Delivery Failed - Action Required",
+      label: "Failed / Technical Issues",
       value: counts.failed,
-      note: "Communications MSG91 reported as failed, rejected, denied, or undelivered.",
+      note: "MSG91 reported failed, rejected, denied, error, or undelivered.",
       tone: "bad",
     },
   ];
@@ -2408,7 +2464,7 @@ async function _doRefreshCustomReport() {
     else if (friendlyStatus === "Delivered / read")
       statusClass = "badge-delivered";
     else if (friendlyStatus === "Failed") statusClass = "badge-failed";
-    else if (friendlyStatus === "Sent to MSG91" || friendlyStatus === "sent")
+    else if (friendlyStatus === "Sent" || friendlyStatus === "sent")
       statusClass = "badge-sent";
     const statusHtml = `<span class="badge ${statusClass}">${escapeHtml(friendlyStatus)}</span>`;
 

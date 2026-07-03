@@ -95,6 +95,7 @@ let webhookPort = Number(
 );
 const reportRefreshIntervalMs = 2000;
 const defaultWebhookBaseUrl = "https://crm.ipkwealth.com";
+const EMAIL_NOTIFICATIONS_ENABLED = false;
 let db;
 let msg91ConfigCache = null;
 let mongoClient = null;
@@ -109,6 +110,7 @@ let isDbClosing = false;
 let scheduleConfig = null;
 let scheduleTimer = null;
 let dailyCacheTimer = null;
+const REPORT_SCHEDULER_ENABLED = false;
 
 // IST (Asia/Calcutta) timezone helpers. All MongoDB queries use UTC Date objects.
 const IST_OFFSET_MINUTES = 330; // UTC+5:30
@@ -176,7 +178,14 @@ function clearScheduleTimer() {
 
 function scheduleNextRun(cfg) {
   clearScheduleTimer();
+  if (!REPORT_SCHEDULER_ENABLED) return;
   if (!cfg || !cfg.enabled) return;
+  if (cfg.mechanism === "email" && !EMAIL_NOTIFICATIONS_ENABLED) {
+    console.log(
+      "Email notifications are disabled. Scheduled email report will not run.",
+    );
+    return;
+  }
   const [hh, mm] = (cfg.time || "10:00").split(":").map((v) => Number(v));
 
   async function runAndReschedule() {
@@ -228,11 +237,24 @@ function scheduleNextRun(cfg) {
 }
 
 async function deliverFileByEmail(filePath, toEmailsCsv) {
+  if (!EMAIL_NOTIFICATIONS_ENABLED) {
+    console.log(
+      `Email notifications are disabled. Skipping email delivery for ${filePath}.`,
+    );
+    return { skipped: true, filePath };
+  }
   // Backwards compatibility fallback if needed
   await sendAdminReportEmailDirect(filePath, null, null);
 }
 
 async function sendAdminReportEmailDirect(filePath, startIso, endIso) {
+  if (!EMAIL_NOTIFICATIONS_ENABLED) {
+    console.log(
+      `Email notifications are disabled. Skipping admin report email for ${filePath}.`,
+    );
+    return { skipped: true, filePath };
+  }
+
   if (
     String(process.env.DISABLE_EMAIL_DELIVERY || "").toLowerCase() === "true"
   ) {
@@ -260,14 +282,15 @@ async function sendAdminReportEmailDirect(filePath, startIso, endIso) {
     .map((s) => s.trim())
     .filter(Boolean);
   const cc = [
-    process.env.ADMIN_EMAILS_CC_SALES1,
-    process.env.ADMIN_EMAILS_CC_SALES2,
+    // process.env.ADMIN_EMAILS_CC_SALES1,
+    // process.env.ADMIN_EMAILS_CC_SALES2,
   ]
     .map((s) => s?.trim())
     .filter(Boolean);
   const bcc = (
     process.env.ADMIN_EMAILS_BCC ||
-    "dhinakaran@ipkwealth.com,vijaytp@ipkwealth.com"
+    "dhinakaran@ipkwealth.com"
+    // ,vijaytp@ipkwealth.com"
   )
     .split(",")
     .map((s) => s.trim())
@@ -303,6 +326,11 @@ async function sendAdminReportEmailDirect(filePath, startIso, endIso) {
 }
 
 async function sendRmGroupedReportsDirect(filters = {}) {
+  if (!EMAIL_NOTIFICATIONS_ENABLED) {
+    console.log("Email notifications are disabled. Skipping RM report emails.");
+    return { count: 0, sent: 0, skipped: true };
+  }
+
   // 1. Get all rows matching the filters
   const allRows = await getCustomReportRows(filters);
   if (!allRows.length) {
@@ -4055,47 +4083,73 @@ function getLogoDataUri() {
 }
 
 function getPdfSummaryHtml(rows, options = {}) {
-  const totalRows = Array.isArray(rows) ? rows.length : 0;
+  // Outbound rows are the actual dispatched communications. Inbound rows are
+  // the investor's replies to those communications - a separate dimension -
+  // so they're excluded from the outbound status buckets below to avoid
+  // double-counting the same investor interaction in two rows.
+  const outboundRows = rows.filter((row) => row.eventType !== "inbound");
   const uniqueCustomers = new Set(
-    rows
+    outboundRows
       .map((row) =>
         String(
-          row.normalizedMobile || row.cleaned || row.mobile || row.customerNumber || "",
-        ).trim(),
+          row.normalizedMobile ||
+            row.mobile ||
+            row.customerNumber ||
+            row.to ||
+            row.phone ||
+            "",
+        )
+          .trim()
+          .replace(/^\+/, ""),
       )
       .filter(Boolean),
   ).size;
-  const deliveredCount = rows.filter((row) => {
-    const status = String(
-      row.deliveryStatus || row.currentStatus || row.numberDeliveryStatus || "",
-    ).toLowerCase();
-    return status.includes("delivered") || status.includes("read") || status.includes("success");
-  }).length;
+
   const replyCount = rows.filter(
-    (row) => (row.customReply || row.lastReplyAt || row.eventType === "inbound") && String(row.customReply || row.lastReplyAt || row.eventType === "inbound").trim(),
+    (row) =>
+      row.eventType === "inbound" || row.customReply || row.lastReplyAt,
   ).length;
-  const awaitingCount = rows.filter((row) => {
+
+  const isDelivered = (row) => {
     const status = String(
-      row.deliveryStatus || row.currentStatus || row.numberDeliveryStatus || "",
+      row.deliveryStatus || row.numberDeliveryStatus || row.normalizedStatus || "",
     ).toLowerCase();
-    return !status || status === "pending" || status === "reporting" || status.includes("submit");
-  }).length;
-  const failedCount = rows.filter((row) => {
+    return (
+      status.includes("deliver") ||
+      status.includes("read") ||
+      status.includes("success")
+    );
+  };
+
+  const isFailed = (row) => {
     const status = String(
-      row.deliveryStatus || row.currentStatus || row.numberDeliveryStatus || "",
+      row.deliveryStatus || row.numberDeliveryStatus || row.normalizedStatus || "",
     ).toLowerCase();
-    return status.includes("failed") || status.includes("undelivered") || status === "invalid";
-  }).length;
+    return (
+      status.includes("fail") ||
+      status.includes("deny") ||
+      status.includes("rejected") ||
+      status.includes("undelivered") ||
+      status.includes("error")
+    );
+  };
+
+  const deliveredCount = outboundRows.filter(isDelivered).length;
+  const failedCount = outboundRows.filter(isFailed).length;
+  // Everything outbound that is neither a confirmed delivery nor a confirmed
+  // failure - so Delivered + Pending + Failed always reconciles exactly to
+  // Total Customers / Sent Records.
+  const pendingCount = outboundRows.length - deliveredCount - failedCount;
 
   const summaryRows = [
-    ["Report type", options.reportType || "MSG91 Webhook Report"],
+    ["Report type", options.reportType || "IPK Wealth Communications"],
     ["Date range", options.dateRange || "Webhook event range"],
-    ["Total event rows", String(totalRows)],
-    ["Unique customers", String(uniqueCustomers)],
-    ["Delivered / Read", String(deliveredCount)],
-    ["Customer replies", String(replyCount)],
-    ["Awaiting delivery update", String(awaitingCount)],
-    ["Failed / Technical issues", String(failedCount)],
+    ["Total Customers", String(outboundRows.length)],
+    ["Unique Customer Mobiles", String(uniqueCustomers)],
+    ["Read", String(deliveredCount)],
+    ["Customer Replies", String(replyCount)],
+    ["Awaiting Delivery Update", String(pendingCount)],
+    ["Failed / Technical Issues", String(failedCount)],
   ];
 
   return `<table class="summary-table"><tbody>${summaryRows
@@ -4114,7 +4168,7 @@ function buildPdfHtmlDocument(title, summaryHtml, rowsHtml) {
 <meta charset="utf-8" />
 <title>${htmlEscapeForPdf(title)}</title>
 <style>
-  body { font-family: Arial, sans-serif; margin: 24px; color: #222; }
+  body { font-family: Helvetica, Arial, sans-serif; margin: 24px; color: #222; }
   .header { display: flex; align-items: center; margin-bottom: 24px; }
   .logo { width: 80px; height: auto; margin-right: 16px; }
   .header-text { display: flex; flex-direction: column; }
@@ -4771,11 +4825,26 @@ ipcMain.handle("export-custom-report", async (event, filters = {}) => {
 });
 
 ipcMain.handle("schedule-set", async (event, cfg = {}) => {
+  if (!REPORT_SCHEDULER_ENABLED) {
+    clearScheduleTimer();
+    scheduleConfig = {
+      enabled: false,
+      time: cfg.time || "10:00",
+      mechanism: cfg.mechanism || "export",
+    };
+    saveScheduleConfig(scheduleConfig);
+    return scheduleConfig;
+  }
+  const requestedMechanism = cfg.mechanism || "export";
+  const mechanism =
+    requestedMechanism === "email" && !EMAIL_NOTIFICATIONS_ENABLED
+      ? "export"
+      : requestedMechanism;
   // validate cfg minimally
   scheduleConfig = {
     enabled: Boolean(cfg.enabled),
     time: cfg.time || "10:00",
-    mechanism: cfg.mechanism || "email",
+    mechanism,
   };
   saveScheduleConfig(scheduleConfig);
   scheduleNextRun(scheduleConfig);
@@ -4783,18 +4852,33 @@ ipcMain.handle("schedule-set", async (event, cfg = {}) => {
 });
 
 ipcMain.handle("schedule-get", async () => {
+  if (!REPORT_SCHEDULER_ENABLED) {
+    clearScheduleTimer();
+    return { enabled: false, time: "10:00", mechanism: "export" };
+  }
   if (!scheduleConfig) scheduleConfig = loadScheduleConfig();
-  return scheduleConfig || { enabled: false, time: "10:00", mechanism: "email" };
+  if (scheduleConfig?.mechanism === "email" && !EMAIL_NOTIFICATIONS_ENABLED) {
+    scheduleConfig = { ...scheduleConfig, enabled: false, mechanism: "export" };
+  }
+  return scheduleConfig || { enabled: false, time: "10:00", mechanism: "export" };
 });
 
 ipcMain.handle("schedule-run-now", async () => {
   try {
+    if (!REPORT_SCHEDULER_ENABLED) {
+      return { success: false, disabled: true };
+    }
     const cfg = scheduleConfig ||
       loadScheduleConfig() || {
         enabled: false,
         time: "10:00",
-        mechanism: "email",
+        mechanism: "export",
       };
+    if (cfg && cfg.mechanism === "email" && !EMAIL_NOTIFICATIONS_ENABLED) {
+      console.log("Email notifications are disabled. Running export instead.");
+      const res = await exportCustomReport({});
+      return { success: true, emailDisabled: true, export: res };
+    }
     if (cfg && cfg.mechanism === "email") {
       console.log(
         "Manual trigger for schedule-run-now starting (Email flow with 24-hour RM/Admin split)...",
@@ -4829,6 +4913,9 @@ ipcMain.handle("schedule-run-now", async () => {
 
 ipcMain.handle("send-admin-report-email", async (event, filters = {}) => {
   console.log("IPC send-admin-report-email triggered with filters:", filters);
+  if (!EMAIL_NOTIFICATIONS_ENABLED) {
+    return { skipped: true, disabled: true, sent: 0 };
+  }
   const rows = await getCustomReportRows(filters);
   if (!rows.length) {
     throw new Error("No transactions found for the selected filter range.");
@@ -4843,6 +4930,9 @@ ipcMain.handle("send-admin-report-email", async (event, filters = {}) => {
 
 ipcMain.handle("send-rm-reports", async (event, filters = {}) => {
   console.log("IPC send-rm-reports triggered with filters:", filters);
+  if (!EMAIL_NOTIFICATIONS_ENABLED) {
+    return { skipped: true, disabled: true, count: 0, sent: 0 };
+  }
   return sendRmGroupedReportsDirect(filters);
 });
 
@@ -6201,7 +6291,7 @@ app.whenReady().then(async () => {
           "Initialized default schedule config (disabled) on first-time launch.",
         );
       }
-      if (scheduleConfig && scheduleConfig.enabled)
+      if (REPORT_SCHEDULER_ENABLED && scheduleConfig && scheduleConfig.enabled)
         scheduleNextRun(scheduleConfig);
     } catch (err) {
       console.warn("Failed to initialize schedule:", err.message);
