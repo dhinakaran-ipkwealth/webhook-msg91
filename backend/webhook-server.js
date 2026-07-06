@@ -13,6 +13,8 @@ const { webhookDedupMiddleware, ensureDedupIndexes } = require("./middleware/web
 const { getMetricsSnapshot } = require("./middleware/request-logger");
 const {
   templateCollectionName,
+  getEventSenderNumber,
+  webhookLogCollectionName,
   ensureIndexesOnce,
 } = require("./lib/template-collections");
 
@@ -438,7 +440,24 @@ function normalizeWebhookItem(item, context = {}) {
       item.webhookType || item.webhook_type || context.webhookType || "msg91",
     customerNumber:
       item.customerNumber || item.customer_number || normalizedMobile || null,
-    integratedNumber: item.integratedNumber || item.integrated_number || null,
+    integratedNumber:
+      item.integratedNumber ||
+      item.integrated_number ||
+      item.senderNumber ||
+      item.sender_number ||
+      item["Whatsapp Number"] ||
+      item.from ||
+      item["Integrated Number"] ||
+      null,
+    senderNumber:
+      item.senderNumber ||
+      item.sender_number ||
+      item.integratedNumber ||
+      item.integrated_number ||
+      item["Whatsapp Number"] ||
+      item.from ||
+      item["Integrated Number"] ||
+      null,
     contentType: item.contentType || item.content_type || null,
     button: item.button || null,
     interactive: item.interactive || null,
@@ -509,12 +528,10 @@ const SENDER_REPORTS_INDEX_DEFS = [
   { key: { messageId: 1 } },
 ];
 
-// Each template gets its own whatsapp_webhook_events_<template> /
-// whatsapp_sender_reports_<template> collection so regulated templates (e.g.
-// trading_confirmation, audited for SEBI) stay isolated from other traffic.
-// Falls back to the shared collection name when templateName can't be resolved.
-async function getWebhookEventsCollection(templateName) {
-  const name = templateCollectionName("whatsapp_webhook_events", templateName);
+// Raw webhook logs live in msg91_webhooks collections named by template, or
+// sendernumber_template when the same template is used by multiple senders.
+async function getWebhookEventsCollection(templateName, senderNumber = "") {
+  const name = await webhookLogCollectionName(mongoDb, templateName, senderNumber);
   const collection = webhookEventsDb.collection(name);
   await ensureIndexesOnce(collection, WEBHOOK_EVENTS_INDEX_DEFS, safeCreateIndex);
   return collection;
@@ -781,7 +798,13 @@ async function applyInboundReplyToReports(event) {
   // historical replies for a customer across every upload.
   if (event.eventKey && latestReport.uploadId && latestReport.numberId) {
     webhookEventsDb
-      .collection(templateCollectionName("whatsapp_webhook_events", event.templateName))
+      .collection(
+        await webhookLogCollectionName(
+          mongoDb,
+          event.templateName,
+          getEventSenderNumber(event),
+        ),
+      )
       .updateOne(
         { eventKey: event.eventKey },
         {
@@ -905,15 +928,14 @@ async function storeWebhook(body, context = {}) {
     console.log(`[store] ${ignoredCount} item(s) ignored (test filter), ${items.length} to process`);
   }
 
-  // Each template's events go into their own whatsapp_webhook_events_<template>
-  // collection so regulated templates (e.g. trading_confirmation, audited for
-  // SEBI) stay isolated. Items without a resolvable template fall back to the
-  // shared whatsapp_webhook_events collection.
+  // Raw webhook logs go into msg91_webhooks collections named by template, or
+  // sendernumber_template when the same template is used by multiple senders.
   const groups = new Map(); // collectionName -> items[]
   for (const item of items) {
-    const collectionName = templateCollectionName(
-      "whatsapp_webhook_events",
+    const collectionName = await webhookLogCollectionName(
+      mongoDb,
       item.templateName,
+      getEventSenderNumber(item),
     );
     if (!groups.has(collectionName)) groups.set(collectionName, []);
     groups.get(collectionName).push(item);

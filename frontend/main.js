@@ -1095,9 +1095,9 @@ function getMongoConfig() {
 }
 
 // ── per-template collection helpers ──────────────────────────────────────────
-// Each MSG91 template gets its own whatsapp_sender_reports_<template> /
-// whatsapp_webhook_events_<template> collection so regulated templates (e.g.
-// trading_confirmation, audited for SEBI) stay isolated from other traffic.
+// Sender reports stay in the main DB as whatsapp_sender_reports_<template>.
+// Raw webhook logs stay in msg91_webhooks as <template>, or
+// <sendernumber>_<template> when the template is shared by multiple senders.
 // Mirrors backend/lib/template-collections.js — keep both in sync since the
 // Electron app and the webhook server write to the same MongoDB collections.
 function sanitizeTemplateName(name) {
@@ -1109,9 +1109,105 @@ function sanitizeTemplateName(name) {
   return cleaned || null;
 }
 
+function sanitizeSenderNumber(value) {
+  const digits = String(value || "").replace(/\D+/g, "");
+  return digits || null;
+}
+
 function templateCollectionName(baseName, templateName) {
   const sanitized = sanitizeTemplateName(templateName);
   return sanitized ? `${baseName}_${sanitized}` : baseName;
+}
+
+function getEventSenderNumber(event = {}) {
+  return (
+    event.senderNumber ||
+    event.sender_number ||
+    event.integratedNumber ||
+    event.integrated_number ||
+    event.rawPayload?.senderNumber ||
+    event.rawPayload?.sender_number ||
+    event.rawPayload?.integratedNumber ||
+    event.rawPayload?.integrated_number ||
+    event.rawPayload?.["Whatsapp Number"] ||
+    event.rawPayload?.["Integrated Number"] ||
+    event.from ||
+    ""
+  );
+}
+
+async function isTemplateSharedBySenders(templateName) {
+  const template = sanitizeTemplateName(templateName);
+  if (!template || !mongoDb) return false;
+  const candidates = getTemplateFilterCandidates(templateName);
+  try {
+    const rows = await mongoDb
+      .collection("whatsapp_uploads")
+      .find(
+        {
+          $or: candidates.flatMap((candidate) => [
+            { templateName: candidate },
+            { templateLabel: candidate },
+          ]),
+        },
+        { projection: { senderId: 1, senderNumber: 1 } },
+      )
+      .limit(1000)
+      .toArray();
+    const senders = new Set(
+      rows
+        .map((row) => sanitizeSenderNumber(row.senderNumber || row.senderId))
+        .filter(Boolean),
+    );
+    return senders.size > 1;
+  } catch (error) {
+    console.warn("Failed to inspect template sender usage:", error.message);
+    return false;
+  }
+}
+
+async function getWebhookLogCollectionName(templateName, senderNumber = "") {
+  const template = sanitizeTemplateName(templateName);
+  if (!template) return "whatsapp_webhook_events";
+  const sender = sanitizeSenderNumber(senderNumber);
+  const shared = await isTemplateSharedBySenders(templateName);
+  return shared && sender ? `${sender}_${template}` : template;
+}
+
+async function getKnownWebhookCollectionNames(templateNameFilter = null, senderFilter = null) {
+  if (!webhookEventsDb) return ["whatsapp_webhook_events"];
+  const collections = await webhookEventsDb.listCollections({}, { nameOnly: true }).toArray();
+  const names = collections
+    .map((collection) => collection.name)
+    .filter((name) => name && !name.startsWith("system."));
+  if (!templateNameFilter || templateNameFilter === "all") {
+    return names.length ? names : ["whatsapp_webhook_events"];
+  }
+  const templateCandidates = getTemplateFilterCandidates(templateNameFilter)
+    .map(sanitizeTemplateName)
+    .filter(Boolean);
+  const sender = sanitizeSenderNumber(senderFilter);
+  const matches = names.filter((name) =>
+    templateCandidates.some(
+      (template) =>
+        name === template ||
+        name === `whatsapp_webhook_events_${template}` ||
+        (sender && name === `${sender}_${template}`) ||
+        name.endsWith(`_${template}`),
+    ),
+  );
+  return matches.length ? matches : [...new Set(templateCandidates)];
+}
+
+function getTemplateNameFromWebhookCollection(collectionName = "") {
+  const name = String(collectionName || "");
+  if (!name || name === "whatsapp_webhook_events" || name === "webhook_dedup")
+    return "";
+  const legacyPrefix = "whatsapp_webhook_events_";
+  if (name.startsWith(legacyPrefix)) return name.slice(legacyPrefix.length);
+  const senderTemplateMatch = name.match(/^\d{10,15}_(.+)$/);
+  if (senderTemplateMatch) return senderTemplateMatch[1];
+  return name;
 }
 
 // Every whatsapp_uploads doc already records templateName, so that collection
@@ -1184,8 +1280,8 @@ async function getSenderReportsCollection(templateName) {
   return collection;
 }
 
-async function getWebhookEventsCollection(templateName) {
-  const name = templateCollectionName("whatsapp_webhook_events", templateName);
+async function getWebhookEventsCollection(templateName, senderNumber = "") {
+  const name = await getWebhookLogCollectionName(templateName, senderNumber);
   const collection = webhookEventsDb.collection(name);
   await ensureIndexesOnce(collection, WEBHOOK_EVENTS_INDEX_DEFS);
   return collection;
@@ -1200,7 +1296,12 @@ async function getWebhookEventsCollection(templateName) {
 function resolveTemplateCollectionCandidates(baseName, templateNameFilter) {
   const candidates = getTemplateFilterCandidates(templateNameFilter);
   if (!candidates.length) return null;
-  return [...new Set(candidates.map((c) => templateCollectionName(baseName, c)))];
+  return [
+    ...new Set([
+      baseName,
+      ...candidates.map((c) => templateCollectionName(baseName, c)),
+    ]),
+  ];
 }
 
 // Query `query` against either a specific set of collections (fast path) or
@@ -1209,19 +1310,29 @@ function resolveTemplateCollectionCandidates(baseName, templateNameFilter) {
 async function findAcrossTemplateCollections(db, baseName, query, options = {}) {
   const { sort, limit } = options;
   const collectionNames =
-    options.collectionNames || (await getKnownCollectionNames(db, baseName));
+    options.collectionNames ||
+    (baseName === "whatsapp_webhook_events"
+      ? await getKnownWebhookCollectionNames()
+      : await getKnownCollectionNames(db, baseName));
 
   if (collectionNames.length === 1) {
-    let cursor = db.collection(collectionNames[0]).find(query);
+    const collectionName = collectionNames[0];
+    let cursor = db.collection(collectionName).find(query);
     if (sort) cursor = cursor.sort(sort);
     if (limit) cursor = cursor.limit(limit);
-    return cursor.toArray();
+    const rows = await cursor.toArray();
+    return rows.map((doc) => ({ ...doc, __collectionName: collectionName }));
   }
 
   const [firstName, ...restNames] = collectionNames;
-  const pipeline = [{ $match: query }];
+  const pipeline = [{ $match: query }, { $addFields: { __collectionName: firstName } }];
   restNames.forEach((name) => {
-    pipeline.push({ $unionWith: { coll: name, pipeline: [{ $match: query }] } });
+    pipeline.push({
+      $unionWith: {
+        coll: name,
+        pipeline: [{ $match: query }, { $addFields: { __collectionName: name } }],
+      },
+    });
   });
   if (sort) pipeline.push({ $sort: sort });
   if (limit) pipeline.push({ $limit: limit });
@@ -2215,18 +2326,21 @@ async function updateNumberFieldsWithInc(numberId, fields, inc = null) {
 async function hasProcessedRemoteEvent(sourceEventId) {
   if (!sourceEventId) return false;
   await requireMongoDb();
-  const row = await webhookEventsDb
-    .collection("whatsapp_webhook_events")
-    .findOne(
-      { sourceEventId: String(sourceEventId) },
-      { projection: { id: 1, eventId: 1 } },
-    );
-  return Boolean(row);
+  const rows = await findAcrossTemplateCollections(
+    webhookEventsDb,
+    "whatsapp_webhook_events",
+    { sourceEventId: String(sourceEventId) },
+    { limit: 1 },
+  );
+  return Boolean(rows[0]);
 }
 
 async function upsertWebhookEventDoc(doc) {
   await requireMongoDb();
-  const webhooks = await getWebhookEventsCollection(doc.templateName);
+  const webhooks = await getWebhookEventsCollection(
+    doc.templateName,
+    getEventSenderNumber(doc),
+  );
   const now = new Date().toISOString();
 
   if (doc.rawPayload && typeof doc.rawPayload === "string") {
@@ -2471,12 +2585,54 @@ function addDateFieldConditions(query, fields, filters = {}) {
   );
 }
 
+function addWebhookSenderFieldFilter(query, filters = {}) {
+  if (!filters.filteredNumberId || filters.filteredNumberId === "all") return;
+  const sender = normalizeSenderFilterValue(filters.filteredNumberId);
+  query.$and = [
+    ...(query.$and || []),
+    {
+      $or: [
+        { integratedNumber: sender },
+        { integrated_number: sender },
+        { senderNumber: sender },
+        { sender_number: sender },
+        { "rawPayload.integratedNumber": sender },
+        { "rawPayload.integrated_number": sender },
+        { "rawPayload.senderNumber": sender },
+        { "rawPayload.sender_number": sender },
+        { "rawPayload.Whatsapp Number": sender },
+        { "rawPayload.Integrated Number": sender },
+      ],
+    },
+  ];
+}
+
+function addWebhookTemplateFieldFilter(query, filters = {}) {
+  if (!filters.templateName || filters.templateName === "all") return;
+  const candidates = getTemplateFilterCandidates(filters.templateName);
+  query.$and = [
+    ...(query.$and || []),
+    {
+      $or: candidates.flatMap((candidate) => [
+        { templateName: candidate },
+        { templateLabel: candidate },
+        { "rawPayload.templateName": candidate },
+        { "rawPayload.template_name": candidate },
+        { "rawPayload.Template": candidate },
+        { "rawPayload.Template Name": candidate },
+        { campaignName: candidate },
+        { "rawPayload.campaignName": candidate },
+      ]),
+    },
+  ];
+}
+
 async function listCustomReportRowsFromMongo(filters = {}) {
   await requireMongoDb();
   const query = {};
   addDateFieldConditions(
     query,
-    ["receivedAt", "statusUpdatedAt", "requestedAt", "updatedAt"],
+    ["receivedAt", "statusUpdatedAt", "requestedAt", "sentAt", "updatedAt", "createdAt"],
     filters,
   );
   if (filters.eventType && filters.eventType !== "all")
@@ -2488,51 +2644,48 @@ async function listCustomReportRowsFromMongo(filters = {}) {
       query.normalizedStatus = filters.status;
     }
   }
-  if (filters.filteredNumberId && filters.filteredNumberId !== "all") {
-    const sender = normalizeSenderFilterValue(filters.filteredNumberId);
-    query.$and = [
-      ...(query.$and || []),
-      {
-        $or: [
-          { integratedNumber: sender },
-          { integrated_number: sender },
-          { senderNumber: sender },
-          { "rawPayload.integratedNumber": sender },
-          { "rawPayload.integrated_number": sender },
-        ],
-      },
-    ];
-  }
-  if (filters.templateName && filters.templateName !== "all") {
-    const candidates = getTemplateFilterCandidates(filters.templateName);
-    query.$and = [
-      ...(query.$and || []),
-      {
-        $or: candidates.flatMap((candidate) => [
-          { templateName: candidate },
-          { "rawPayload.templateName": candidate },
-          { "rawPayload.template_name": candidate },
-          { campaignName: candidate },
-          { "rawPayload.campaignName": candidate },
-        ]),
-      },
-    ];
+  if (!(filters.templateName && filters.templateName !== "all")) {
+    addWebhookSenderFieldFilter(query, filters);
   }
 
-  const events = await findAcrossTemplateCollections(
-    webhookEventsDb,
-    "whatsapp_webhook_events",
-    query,
-    {
-      sort: { receivedAt: -1, statusUpdatedAt: -1, updatedAt: -1, _id: -1 },
-      limit: 5000,
-      collectionNames:
-        resolveTemplateCollectionCandidates(
-          "whatsapp_webhook_events",
-          filters.templateName,
-        ) || undefined,
-    },
+  const selectedTemplate = filters.templateName && filters.templateName !== "all";
+  const collectionNames = await getKnownWebhookCollectionNames(
+    filters.templateName,
+    filters.filteredNumberId,
   );
+  const routedCollectionNames = selectedTemplate
+    ? collectionNames.filter((name) => name !== "whatsapp_webhook_events")
+    : collectionNames;
+
+  const events = routedCollectionNames.length
+    ? await findAcrossTemplateCollections(
+        webhookEventsDb,
+        "whatsapp_webhook_events",
+        query,
+        {
+          sort: { receivedAt: -1, statusUpdatedAt: -1, updatedAt: -1, _id: -1 },
+          limit: 5000,
+          collectionNames: routedCollectionNames,
+        },
+      )
+    : [];
+
+  if (selectedTemplate) {
+    const sharedQuery = JSON.parse(JSON.stringify(query));
+    addWebhookSenderFieldFilter(sharedQuery, filters);
+    addWebhookTemplateFieldFilter(sharedQuery, filters);
+    const sharedEvents = await findAcrossTemplateCollections(
+      webhookEventsDb,
+      "whatsapp_webhook_events",
+      sharedQuery,
+      {
+        sort: { receivedAt: -1, statusUpdatedAt: -1, updatedAt: -1, _id: -1 },
+        limit: 5000,
+        collectionNames: ["whatsapp_webhook_events"],
+      },
+    );
+    events.push(...sharedEvents);
+  }
 
   const rows = await Promise.all(
     events.map(async (event, index) => {
@@ -2591,7 +2744,11 @@ async function listCustomReportRowsFromMongo(filters = {}) {
           raw.integratedNumber ||
           "",
         templateName:
-          event.templateName || raw.templateName || raw.template_name || "",
+          event.templateName ||
+          raw.templateName ||
+          raw.template_name ||
+          getTemplateNameFromWebhookCollection(event.__collectionName) ||
+          "",
         campaignName:
           event.campaignName || raw.campaignName || raw.campaign_name || "",
         receivedAt:
@@ -3986,7 +4143,7 @@ async function syncMongoWebhookEvents() {
   if (!mongoDb || !webhookEventsDb) return;
 
   // Reconciliation sweep has no template context up front, so it must scan
-  // every known whatsapp_webhook_events_<template> collection.
+  // every known webhook log collection in msg91_webhooks.
   const events = await findAcrossTemplateCollections(
     webhookEventsDb,
     "whatsapp_webhook_events",
@@ -4012,7 +4169,11 @@ async function syncMongoWebhookEvents() {
     // Each event's own templateName field is the routing key it was stored
     // under — reuse it rather than tracking which collection it came from.
     const eventCollection = webhookEventsDb.collection(
-      templateCollectionName("whatsapp_webhook_events", event.templateName),
+      event.__collectionName ||
+        (await getWebhookLogCollectionName(
+          event.templateName,
+          getEventSenderNumber(event),
+        )),
     );
     const status = createStatusLabel(event.normalizedStatus);
     const senderReport = await findSenderReportForOutboundEvent(event);
@@ -4594,12 +4755,12 @@ function getPdfSummaryHtml(rows, options = {}) {
   const summaryRows = [
     ["Report type", options.reportType || "IPK Wealth Communications"],
     ["Date range", options.dateRange || "Webhook event range"],
-    ["Total Customers", String(outboundRows.length)],
-    ["Unique Customers", String(uniqueCustomers)],
-    ["Read", String(deliveredCount)],
+    ["Total Customers / Sent Records", String(outboundRows.length)],
+    ["Unique Customer Mobiles", String(uniqueCustomers)],
+    ["Delivered / Read", String(deliveredCount)],
     ["Customer Replies", String(replyCount)],
-    ["Delivery Pending", String(pendingCount)],
-    ["Failed/Tech Issues", String(failedCount)],
+    ["Awaiting Delivery Update", String(pendingCount)],
+    ["Failed / Technical Issues", String(failedCount)],
   ];
 
   return `<table class="summary-table"><tbody>${summaryRows
@@ -4618,23 +4779,39 @@ function buildPdfHtmlDocument(title, summaryHtml, rowsHtml) {
 <meta charset="utf-8" />
 <title>${htmlEscapeForPdf(title)}</title>
 <style>
-  body { font-family: Helvetica, Arial, sans-serif; margin: 24px; color: #222; }
-  .header { display: flex; align-items: center; margin-bottom: 24px; }
-  .logo { width: 80px; height: auto; margin-right: 16px; }
+  * { box-sizing: border-box; }
+  body { font-family: Helvetica, Arial, sans-serif; margin: 18px; color: #222; font-size: 9px; }
+  .header { display: flex; align-items: center; margin-bottom: 14px; }
+  .logo { width: 60px; height: auto; margin-right: 12px; }
   .header-text { display: flex; flex-direction: column; }
-  .company-name { margin: 0; font-size: 28px; letter-spacing: 0.04em; color: #0c3d91; }
-  .company-tagline { margin: 2px 0 0; font-size: 14px; color: #555; }
+  .company-name { margin: 0; font-size: 20px; letter-spacing: 0; color: #0c3d91; }
+  .company-tagline { margin: 2px 0 0; font-size: 9px; color: #555; }
   h1, h2 { margin: 0 0 12px 0; font-weight: 600; }
-  h1 { font-size: 24px; }
-  h2 { font-size: 20px; margin-top: 32px; }
+  h1 { font-size: 16px; }
+  h2 { font-size: 13px; margin-top: 18px; }
   .summary-table, .row-table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
-  .summary-table th, .summary-table td, .row-table th, .row-table td { border: 1px solid #ccc; padding: 8px 10px; vertical-align: top; }
+  .summary-table th, .summary-table td, .row-table th, .row-table td { border: 1px solid #c8ced8; padding: 4px 5px; vertical-align: top; }
   .summary-table th { background: #f1f5fb; text-align: left; font-weight: 700; width: 30%; }
   .summary-table td { background: #fff; }
+  .summary-table { font-size: 9px; margin-bottom: 18px; }
+  .row-table { table-layout: fixed; font-size: 7.4px; line-height: 1.28; page-break-inside: auto; }
   .row-table th { background: #f7f9fc; text-align: left; font-weight: 700; }
-  .row-table td { background: #fff; }
+  .row-table td { background: #fff; word-break: break-word; overflow-wrap: anywhere; }
   .row-table thead th { background: #0c3d91; color: #fff; }
-  .footer { margin-top: 16px; font-size: 12px; color: #555; }
+  .row-table tr { page-break-inside: avoid; }
+  .row-table th:nth-child(1), .row-table td:nth-child(1) { width: 8%; }
+  .row-table th:nth-child(2), .row-table td:nth-child(2) { width: 12%; }
+  .row-table th:nth-child(3), .row-table td:nth-child(3) { width: 8%; }
+  .row-table th:nth-child(4), .row-table td:nth-child(4) { width: 8%; }
+  .row-table th:nth-child(5), .row-table td:nth-child(5) { width: 9%; }
+  .row-table th:nth-child(6), .row-table td:nth-child(6) { width: 18%; }
+  .row-table th:nth-child(7), .row-table td:nth-child(7) { width: 13%; line-height: 1.5; }
+  .row-table th:nth-child(8), .row-table td:nth-child(8) { width: 14%; }
+  .row-table th:nth-child(9), .row-table td:nth-child(9) { width: 7%; }
+  .row-table th:nth-child(10), .row-table td:nth-child(10) { width: 8%; }
+  .row-table th:nth-child(11), .row-table td:nth-child(11) { width: 5%; }
+  .row-table th:nth-child(12), .row-table td:nth-child(12) { width: 4%; }
+  .footer { margin-top: 12px; font-size: 8px; color: #555; }
 </style>
 </head>
 <body>
@@ -4669,7 +4846,7 @@ function getPdfRowsTableHtml(rows) {
           .join("")}</tr>`,
     )
     .join("");
-  return `<h2>Delivery Report</h2><table class="row-table">${headerHtml}<tbody>${bodyHtml}</tbody></table>`;
+  return `<h2>Full Report Data</h2><table class="row-table">${headerHtml}<tbody>${bodyHtml}</tbody></table>`;
 }
 
 async function renderPdfDocument(html, filenamePrefix, rowCount) {
@@ -4688,22 +4865,109 @@ async function renderPdfDocument(html, filenamePrefix, rowCount) {
     printBackground: true,
     marginsType: 1,
     pageSize: "A4",
+    landscape: true,
   });
 
   const exportDir = app.getPath("downloads");
+  const filename = filenamePrefix.toLowerCase().endsWith(".pdf")
+    ? filenamePrefix
+    : `${filenamePrefix}-${new Date().toISOString().slice(0, 10)}.pdf`;
   const filePath = path.join(
     exportDir,
-    `${filenamePrefix}-${new Date().toISOString().slice(0, 10)}.pdf`,
+    filename,
   );
   fs.writeFileSync(filePath, pdfData);
   pdfWindow.close();
   return { filePath, rowCount };
 }
 
-function generatePdfFromRows(rows, filenamePrefix, isMultiSection = false) {
+function formatDateForReportFileName(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Calcutta",
+    day: "2-digit",
+    month: "long",
+    year: "numeric",
+  }).formatToParts(date);
+  const day = parts.find((part) => part.type === "day")?.value || "";
+  const month = parts.find((part) => part.type === "month")?.value || "";
+  const year = parts.find((part) => part.type === "year")?.value || "";
+  return [day, month, year].filter(Boolean).join("_");
+}
+
+function getReportFileDateBounds(filters = {}, rows = []) {
+  if (filters.startDateTime || filters.endDateTime) {
+    return {
+      start: filters.startDateTime || filters.endDateTime,
+      end: filters.endDateTime || filters.startDateTime,
+    };
+  }
+
+  const times = rows
+    .map((row) => row.requestedAt || row.sentAt || row.receivedAt || row.statusUpdatedAt)
+    .filter(Boolean)
+    .map((value) => new Date(value).getTime())
+    .filter((time) => !Number.isNaN(time));
+  if (!times.length) {
+    const now = new Date().toISOString();
+    return { start: now, end: now };
+  }
+  return {
+    start: new Date(Math.min(...times)).toISOString(),
+    end: new Date(Math.max(...times)).toISOString(),
+  };
+}
+
+function buildCustomReportPdfFileName(filters = {}, rows = []) {
+  const bounds = getReportFileDateBounds(filters, rows);
+  const fromDate = formatDateForReportFileName(bounds.start);
+  const endDate = formatDateForReportFileName(bounds.end);
+  return `IPK_Wealth_Comunications_${fromDate}-to-${endDate}.pdf`;
+}
+
+function formatDateRangeForReport(filters = {}, rows = []) {
+  const format = (value) => {
+    if (!value) return "";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value);
+    return date.toLocaleString("en-IN", { timeZone: "Asia/Calcutta" });
+  };
+  const start = format(filters.startDateTime);
+  const end = format(filters.endDateTime);
+  if (start && end) return `${start} to ${end}`;
+  if (start) return `From ${start}`;
+  if (end) return `Until ${end}`;
+
+  const times = rows
+    .map((row) => row.requestedAt || row.sentAt || row.receivedAt || row.statusUpdatedAt)
+    .filter(Boolean)
+    .map((value) => new Date(value).getTime())
+    .filter((time) => !Number.isNaN(time));
+  if (!times.length) return "All available records";
+  const min = format(new Date(Math.min(...times)));
+  const max = format(new Date(Math.max(...times)));
+  return min === max ? min : `${min} to ${max}`;
+}
+
+function getPdfReportType(rows = [], filters = {}) {
+  if (filters.templateName && filters.templateName !== "all") {
+    const matchingLabel =
+      rows.map(getTemplateLabelForReport).find(Boolean) || filters.templateName;
+    return `IPK Wealth Communications - ${matchingLabel}`;
+  }
+
+  const labels = [
+    ...new Set(rows.map(getTemplateLabelForReport).filter(Boolean)),
+  ];
+  const label = labels.length === 1 ? labels[0] : "All Templates";
+  return `IPK Wealth Communications - ${label}`;
+}
+
+function generatePdfFromRows(rows, filenamePrefix, isMultiSection = false, filters = {}) {
   const summaryHtml = getPdfSummaryHtml(rows, {
-    reportType: isMultiSection ? "Grouped webhook report" : "MSG91 Webhook Report",
-    dateRange: isMultiSection ? "Webhook event date range" : "Webhook event range",
+    reportType: getPdfReportType(rows, filters),
+    dateRange: formatDateRangeForReport(filters, rows),
   });
   const rowsHtml = getPdfRowsTableHtml(
     rows.map((row) => ({
@@ -4765,7 +5029,7 @@ function generatePdfFromRows(rows, filenamePrefix, isMultiSection = false) {
       Status: row.normalizedStatus || row.deliveryStatus || row.numberDeliveryStatus || row.rawPayload?.status || "",
     })),
   );
-  const html = buildPdfHtmlDocument("MSG91 Webhook Report", summaryHtml, rowsHtml);
+  const html = buildPdfHtmlDocument("IPK Wealth Communications", summaryHtml, rowsHtml);
   return renderPdfDocument(html, filenamePrefix, rows.length);
 }
 
@@ -4963,7 +5227,10 @@ async function getInboundReplyMapForUpload(uploadId) {
     ];
   });
 
-  const events = await (await getWebhookEventsCollection(upload?.templateName))
+  const events = await (await getWebhookEventsCollection(
+    upload?.templateName,
+    upload?.senderNumber || upload?.senderId,
+  ))
     .find({
       eventType: "inbound",
       $or: [
@@ -5693,11 +5960,91 @@ async function listSelectedUploadReportRows(filters = {}) {
     });
 }
 
+function getCustomReportRowKey(row) {
+  const raw = parseJsonField(row.rawPayload, row.rawPayload || {});
+  return [
+    row.eventKey,
+    row.sourceEventId,
+    row.requestId,
+    row.responseId,
+    row.messageId,
+    raw.eventKey,
+    raw.uuid,
+    raw.UUID,
+    raw.requestId,
+    raw["Request Id"],
+    row.normalizedMobile || row.customerNumber || row.mobile,
+    row.receivedAt || row.statusUpdatedAt || row.requestedAt || row.sentAt,
+  ]
+    .filter(Boolean)
+    .map((value) => String(value).trim())
+    .filter(Boolean)
+    .join("|");
+}
+
+function getReportRowRequestKeys(row) {
+  const raw = parseJsonField(row.rawPayload, row.rawPayload || {});
+  return [
+    row.requestId,
+    row.responseId,
+    row.messageId,
+    row.eventKey,
+    row.sourceEventId,
+    raw.requestId,
+    raw["Request Id"],
+    raw.replyMsgId,
+    raw.oneApiRequestId,
+    raw.uuid,
+    raw.UUID,
+  ]
+    .filter(Boolean)
+    .map((value) => String(value).trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function getReportRowMobileKey(row) {
+  const raw = parseJsonField(row.rawPayload, row.rawPayload || {});
+  return formatPhoneForCall(
+    row.normalizedMobile ||
+      row.customerNumber ||
+      row.mobile ||
+      raw.customerNumber ||
+      raw.customer_number ||
+      raw.mobile ||
+      raw.to ||
+      "",
+  );
+}
+
+function webhookRowMatchesSentTransaction(row, requestKeys, mobileKeys) {
+  if (getReportRowRequestKeys(row).some((key) => requestKeys.has(key))) {
+    return true;
+  }
+  const mobile = getReportRowMobileKey(row);
+  return Boolean(mobile && mobileKeys.has(mobile));
+}
+
 async function getCustomReportRows(filters = {}) {
-  const rows = filters.uploadId
-    ? await listSelectedUploadReportRows(filters)
-    : await listSenderReportRowsForCustomReport(filters);
-  return rows.map((row) => ({
+  let rows;
+  if (filters.uploadId) {
+    rows = await listSelectedUploadReportRows(filters);
+  } else {
+    const sentRows = await listSenderReportRowsForCustomReport(filters);
+    const requestKeys = new Set(sentRows.flatMap(getReportRowRequestKeys));
+    const mobileKeys = new Set(sentRows.map(getReportRowMobileKey).filter(Boolean));
+    const webhookOnlyRows = (await listCustomReportRowsFromMongo(filters)).filter(
+      (row) => !webhookRowMatchesSentTransaction(row, requestKeys, mobileKeys),
+    );
+    rows = [...sentRows, ...webhookOnlyRows];
+  }
+  const seen = new Set();
+  return rows.filter((row) => {
+    const key = getCustomReportRowKey(row);
+    if (!key) return true;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).map((row) => ({
     ...row,
     rawPayload: parseJsonField(row.rawPayload, {}),
     csvRowData: parseJsonField(row.csvRowData, {}),
@@ -5939,7 +6286,7 @@ function getDeliveryStatusLinesForReport(row) {
     lines.push(`Sent: ${sentAt || "-"}`);
   }
   if (sentStatus.includes("deliver") || sentStatus.includes("read")) {
-    lines.push(`Delivered: ${statusAt || "-"}`);
+    lines.push(`Delivered / Read: ${statusAt || "-"}`);
   } else if (sentStatus.includes("fail")) {
     lines.push(`Failed: ${statusAt || "-"}`);
   } else if (!sentStatus && row.eventType !== "inbound") {
@@ -5949,7 +6296,7 @@ function getDeliveryStatusLinesForReport(row) {
     lines.push(`Customer reply: ${replyAt || "-"}`);
   }
 
-  return lines.join("\n") || "-";
+  return lines.join("\n\n") || "-";
 }
 
 function getReceivedMessageForReport(row) {
@@ -6063,7 +6410,12 @@ async function exportCustomReport(filters = {}) {
   if (!rows.length) {
     throw new Error("No webhook report rows to export.");
   }
-  return generateExcelFromRows(rows, "msg91-webhook-report", !filters.uploadId); // selected upload uses a direct single-sheet report
+  return generatePdfFromRows(
+    rows,
+    buildCustomReportPdfFileName(filters, rows),
+    !filters.uploadId,
+    filters,
+  );
 }
 
 ipcMain.handle("get-msg91-config", async () => {
