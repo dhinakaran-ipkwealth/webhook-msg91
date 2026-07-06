@@ -11,6 +11,10 @@ const requestLogger = require("./middleware/request-logger");
 const { webhookLimiter, apiLimiter, rateLimitStatus } = require("./middleware/rate-limit");
 const { webhookDedupMiddleware, ensureDedupIndexes } = require("./middleware/webhook-dedup");
 const { getMetricsSnapshot } = require("./middleware/request-logger");
+const {
+  templateCollectionName,
+  ensureIndexesOnce,
+} = require("./lib/template-collections");
 
 const PORT = Number(process.env.PORT || process.env.WEBHOOK_PORT || 3002);
 const HOST = process.env.WEBHOOK_HOST || "0.0.0.0";
@@ -481,6 +485,48 @@ async function safeCreateIndex(collection, key, options = {}) {
   }
 }
 
+const WEBHOOK_EVENTS_INDEX_DEFS = [
+  { key: { receivedAt: -1 } },
+  { key: { source: 1, receivedAt: -1 } },
+  { key: { source: 1, sourceEventId: 1 } },
+  { key: { normalizedMobile: 1, receivedAt: -1 } },
+  { key: { eventType: 1, normalizedStatus: 1, receivedAt: -1 } },
+  { key: { eventKey: 1 }, options: { unique: true } },
+  { key: { stableKey: 1 }, options: { sparse: true } },
+  {
+    key: { source: 1, stableKey: 1 },
+    options: {
+      unique: true,
+      partialFilterExpression: { stableKey: { $type: "string" } },
+    },
+  },
+  { key: { modifiedAt: -1 } },
+];
+
+const SENDER_REPORTS_INDEX_DEFS = [
+  { key: { mobile: 1, sentAt: -1 } },
+  { key: { responseId: 1 } },
+  { key: { messageId: 1 } },
+];
+
+// Each template gets its own whatsapp_webhook_events_<template> /
+// whatsapp_sender_reports_<template> collection so regulated templates (e.g.
+// trading_confirmation, audited for SEBI) stay isolated from other traffic.
+// Falls back to the shared collection name when templateName can't be resolved.
+async function getWebhookEventsCollection(templateName) {
+  const name = templateCollectionName("whatsapp_webhook_events", templateName);
+  const collection = webhookEventsDb.collection(name);
+  await ensureIndexesOnce(collection, WEBHOOK_EVENTS_INDEX_DEFS, safeCreateIndex);
+  return collection;
+}
+
+async function getSenderReportsCollection(templateName) {
+  const name = templateCollectionName("whatsapp_sender_reports", templateName);
+  const collection = mongoDb.collection(name);
+  await ensureIndexesOnce(collection, SENDER_REPORTS_INDEX_DEFS, safeCreateIndex);
+  return collection;
+}
+
 async function initMongo() {
   mongoClient = new MongoClient(MONGODB_URI, {
     serverSelectionTimeoutMS: 10000,
@@ -532,6 +578,11 @@ async function initMongo() {
     { uploadId: 1, numberId: 1 },
     { unique: true },
   );
+
+  // Pre-warm the priority audited template so its collections/indexes exist
+  // from process start rather than being created lazily on first webhook.
+  await getWebhookEventsCollection("trading_confirmation");
+  await getSenderReportsCollection("trading_confirmation");
 }
 
 function buildReplyHistoryItem(event) {
@@ -588,8 +639,7 @@ async function findSenderReportByWebhookContent(event) {
   if (event.uploadId) query.uploadId = Number(event.uploadId);
   if (event.templateName) query.templateName = event.templateName;
 
-  const candidates = await mongoDb
-    .collection("whatsapp_sender_reports")
+  const candidates = await (await getSenderReportsCollection(event.templateName))
     .find(query)
     .sort({ sentAt: -1, updatedAt: -1, _id: -1 })
     .limit(50)
@@ -620,7 +670,7 @@ async function applyInboundReplyToReports(event) {
   const replyLabel =
     replyText || (event.contentType ? `[${event.contentType}]` : "[message]");
 
-  const senderReports = mongoDb.collection("whatsapp_sender_reports");
+  const senderReports = await getSenderReportsCollection(event.templateName);
   const numbers = mongoDb.collection("whatsapp_numbers");
   const replyAt = event.receivedAt || new Date().toISOString();
   const now = new Date().toISOString();
@@ -731,7 +781,7 @@ async function applyInboundReplyToReports(event) {
   // historical replies for a customer across every upload.
   if (event.eventKey && latestReport.uploadId && latestReport.numberId) {
     webhookEventsDb
-      .collection("whatsapp_webhook_events")
+      .collection(templateCollectionName("whatsapp_webhook_events", event.templateName))
       .updateOne(
         { eventKey: event.eventKey },
         {
@@ -763,7 +813,7 @@ async function applyOutboundStatusToReports(event) {
   const now = new Date().toISOString();
 
   const requestId = event.requestId;
-  const senderReports = mongoDb.collection("whatsapp_sender_reports");
+  const senderReports = await getSenderReportsCollection(event.templateName);
   const numbers = mongoDb.collection("whatsapp_numbers");
 
   let latestReport = null;
@@ -855,117 +905,143 @@ async function storeWebhook(body, context = {}) {
     console.log(`[store] ${ignoredCount} item(s) ignored (test filter), ${items.length} to process`);
   }
 
-  const webhookEvents = webhookEventsDb.collection("whatsapp_webhook_events");
+  // Each template's events go into their own whatsapp_webhook_events_<template>
+  // collection so regulated templates (e.g. trading_confirmation, audited for
+  // SEBI) stay isolated. Items without a resolvable template fall back to the
+  // shared whatsapp_webhook_events collection.
+  const groups = new Map(); // collectionName -> items[]
+  for (const item of items) {
+    const collectionName = templateCollectionName(
+      "whatsapp_webhook_events",
+      item.templateName,
+    );
+    if (!groups.has(collectionName)) groups.set(collectionName, []);
+    groups.get(collectionName).push(item);
+  }
 
-  // Primary dedup: eventKey (SHA256 of all identifying fields including uuid).
-  // Secondary dedup: stableKey for inbound events — catches MSG91 webhook
-  // retries where the uuid changes but the mobile+text+replyMsgId are the same.
-  const inboundStableKeys = items
-    .filter((i) => i.stableKey)
-    .map((i) => i.stableKey);
-
-  const [existingByEventKey, existingByStableKey] = await Promise.all([
-    webhookEvents
-      .find(
-        { eventKey: { $in: items.map((i) => i.eventKey) } },
-        { projection: { eventKey: 1 } },
-      )
-      .toArray(),
-    inboundStableKeys.length
-      ? webhookEvents
-          .find(
-            { stableKey: { $in: inboundStableKeys } },
-            { projection: { stableKey: 1 } },
-          )
-          .toArray()
-      : Promise.resolve([]),
-  ]);
-
-  const existingEventKeys = new Set(existingByEventKey.map((e) => e.eventKey));
-  const existingStableKeys = new Set(
-    existingByStableKey.map((e) => e.stableKey).filter(Boolean),
-  );
-
+  let insertedCount = 0;
+  let matchedCount = 0;
+  let modifiedCount = 0;
+  const applyResultsByItem = new Map();
   const now = new Date().toISOString();
-  const operations = items.map((item) => {
-    const insertDoc = { ...item };
-    delete insertDoc.updatedAt;
-    delete insertDoc.modifiedAt;
-    // These fields are also written via $set below — Mongo rejects an update
-    // that targets the same path from both $setOnInsert and $set.
-    delete insertDoc.eventKey;
-    delete insertDoc.stableKey;
-    delete insertDoc.rawPayload;
-    const dedupeFilter = existingEventKeys.has(item.eventKey)
-      ? { eventKey: item.eventKey }
-      : item.stableKey
-        ? { stableKey: item.stableKey }
-        : { eventKey: item.eventKey };
-    return {
-      updateOne: {
-        filter: dedupeFilter,
-        update: {
-          $setOnInsert: { ...insertDoc, createdAt: insertDoc.createdAt || now },
-          $set: {
-            eventKey: item.eventKey,
-            stableKey: item.stableKey || null,
-            rawPayload: item.rawPayload,
-            updatedAt: now,
-            modifiedAt: now,
-            lastSeenAt: now,
+
+  for (const [collectionName, groupItems] of groups) {
+    const webhookEvents = webhookEventsDb.collection(collectionName);
+    await ensureIndexesOnce(webhookEvents, WEBHOOK_EVENTS_INDEX_DEFS, safeCreateIndex);
+
+    // Primary dedup: eventKey (SHA256 of all identifying fields including uuid).
+    // Secondary dedup: stableKey for inbound events — catches MSG91 webhook
+    // retries where the uuid changes but the mobile+text+replyMsgId are the same.
+    const inboundStableKeys = groupItems
+      .filter((i) => i.stableKey)
+      .map((i) => i.stableKey);
+
+    const [existingByEventKey, existingByStableKey] = await Promise.all([
+      webhookEvents
+        .find(
+          { eventKey: { $in: groupItems.map((i) => i.eventKey) } },
+          { projection: { eventKey: 1 } },
+        )
+        .toArray(),
+      inboundStableKeys.length
+        ? webhookEvents
+            .find(
+              { stableKey: { $in: inboundStableKeys } },
+              { projection: { stableKey: 1 } },
+            )
+            .toArray()
+        : Promise.resolve([]),
+    ]);
+
+    const existingEventKeys = new Set(existingByEventKey.map((e) => e.eventKey));
+    const existingStableKeys = new Set(
+      existingByStableKey.map((e) => e.stableKey).filter(Boolean),
+    );
+
+    const operations = groupItems.map((item) => {
+      const insertDoc = { ...item };
+      delete insertDoc.updatedAt;
+      delete insertDoc.modifiedAt;
+      // These fields are also written via $set below — Mongo rejects an update
+      // that targets the same path from both $setOnInsert and $set.
+      delete insertDoc.eventKey;
+      delete insertDoc.stableKey;
+      delete insertDoc.rawPayload;
+      const dedupeFilter = existingEventKeys.has(item.eventKey)
+        ? { eventKey: item.eventKey }
+        : item.stableKey
+          ? { stableKey: item.stableKey }
+          : { eventKey: item.eventKey };
+      return {
+        updateOne: {
+          filter: dedupeFilter,
+          update: {
+            $setOnInsert: { ...insertDoc, createdAt: insertDoc.createdAt || now },
+            $set: {
+              eventKey: item.eventKey,
+              stableKey: item.stableKey || null,
+              rawPayload: item.rawPayload,
+              updatedAt: now,
+              modifiedAt: now,
+              lastSeenAt: now,
+            },
+            $inc: { seenCount: 1 },
           },
-          $inc: { seenCount: 1 },
+          upsert: true,
         },
-        upsert: true,
-      },
-    };
-  });
+      };
+    });
 
-  const result = await webhookEvents.bulkWrite(operations, {
-    ordered: false,
-  });
+    const result = await webhookEvents.bulkWrite(operations, {
+      ordered: false,
+    });
+    insertedCount += result.upsertedCount || 0;
+    matchedCount += result.matchedCount || 0;
+    modifiedCount += result.modifiedCount || 0;
 
-  const insertedOperationIndexes = new Set(
-    Object.keys(result.upsertedIds || {}).map((value) => Number(value)),
-  );
-  const applyResults = [];
-  const seenInRequest = new Set();
-  for (const [index, item] of items.entries()) {
-    const requestDedupeKey = item.stableKey || item.eventKey;
-    if (seenInRequest.has(requestDedupeKey)) {
-      console.log(`[store] skip duplicate_in_request`, { mobile: item.normalizedMobile, type: item.eventType });
-      applyResults.push({ applied: false, reason: "duplicate_in_request" });
-      continue;
-    }
-    seenInRequest.add(requestDedupeKey);
+    const insertedOperationIndexes = new Set(
+      Object.keys(result.upsertedIds || {}).map((value) => Number(value)),
+    );
+    const seenInRequest = new Set();
+    for (const [index, item] of groupItems.entries()) {
+      const requestDedupeKey = item.stableKey || item.eventKey;
+      if (seenInRequest.has(requestDedupeKey)) {
+        console.log(`[store] skip duplicate_in_request`, { mobile: item.normalizedMobile, type: item.eventType });
+        applyResultsByItem.set(item, { applied: false, reason: "duplicate_in_request" });
+        continue;
+      }
+      seenInRequest.add(requestDedupeKey);
 
-    // Skip if already stored (primary or stable key match).
-    if (existingEventKeys.has(item.eventKey)) {
-      console.log(`[store] skip duplicate_event`, { mobile: item.normalizedMobile, type: item.eventType, eventKey: item.eventKey });
-      applyResults.push({ applied: false, reason: "duplicate_event" });
-      continue;
-    }
-    if (item.stableKey && existingStableKeys.has(item.stableKey)) {
-      console.log(`[store] skip duplicate_stable_key`, { mobile: item.normalizedMobile, type: item.eventType });
-      applyResults.push({ applied: false, reason: "duplicate_stable_key" });
-      continue;
-    }
-    if (!insertedOperationIndexes.has(index)) {
-      console.log(`[store] skip duplicate_upsert_match`, { mobile: item.normalizedMobile, type: item.eventType });
-      applyResults.push({ applied: false, reason: "duplicate_upsert_match" });
-      continue;
-    }
-    if (item.eventType === "inbound") {
-      applyResults.push(await applyInboundReplyToReports(item));
-    } else {
-      applyResults.push(await applyOutboundStatusToReports(item));
+      // Skip if already stored (primary or stable key match).
+      if (existingEventKeys.has(item.eventKey)) {
+        console.log(`[store] skip duplicate_event`, { mobile: item.normalizedMobile, type: item.eventType, eventKey: item.eventKey });
+        applyResultsByItem.set(item, { applied: false, reason: "duplicate_event" });
+        continue;
+      }
+      if (item.stableKey && existingStableKeys.has(item.stableKey)) {
+        console.log(`[store] skip duplicate_stable_key`, { mobile: item.normalizedMobile, type: item.eventType });
+        applyResultsByItem.set(item, { applied: false, reason: "duplicate_stable_key" });
+        continue;
+      }
+      if (!insertedOperationIndexes.has(index)) {
+        console.log(`[store] skip duplicate_upsert_match`, { mobile: item.normalizedMobile, type: item.eventType });
+        applyResultsByItem.set(item, { applied: false, reason: "duplicate_upsert_match" });
+        continue;
+      }
+      if (item.eventType === "inbound") {
+        applyResultsByItem.set(item, await applyInboundReplyToReports(item));
+      } else {
+        applyResultsByItem.set(item, await applyOutboundStatusToReports(item));
+      }
     }
   }
 
+  const applyResults = items.map((item) => applyResultsByItem.get(item));
+
   return {
-    insertedCount: result.upsertedCount || 0,
-    matchedCount: result.matchedCount || 0,
-    modifiedCount: result.modifiedCount || 0,
+    insertedCount,
+    matchedCount,
+    modifiedCount,
     ignoredCount: rawItems.length - items.length,
     appliedCount: applyResults.filter((item) => item.applied).length,
     applyResults,

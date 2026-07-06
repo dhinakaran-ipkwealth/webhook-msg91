@@ -118,6 +118,28 @@
         line-height: 1.45;
       }
 
+      .report-loading {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--muted);
+        font-size: 13px;
+        margin: 4px 0 10px;
+      }
+
+      .report-loading .spinner {
+        width: 14px;
+        height: 14px;
+        border: 2px solid var(--line);
+        border-top-color: var(--primary);
+        border-radius: 50%;
+        animation: report-spin 0.7s linear infinite;
+      }
+
+      @keyframes report-spin {
+        to { transform: rotate(360deg); }
+      }
+
       .top-header-status,
       .info-box,
       .delivery-note,
@@ -636,7 +658,6 @@
             <div class="field-row">
               <input id="deliveryPhoneSearch" type="text" placeholder="Search delivery phone" />
               <button id="deliveryReportRefreshButton" class="secondary-button">
-                <span id="deliveryReportRefreshIcon">Refresh</span>
                 <span id="deliveryReportRefreshLabel">Refresh Report</span>
               </button>
             </div>
@@ -679,6 +700,7 @@
 
               <input id="customStartDateTime" type="hidden" />
               <input id="customEndDateTime" type="hidden" />
+              <div id="customReportLoading" class="report-loading" hidden><span class="spinner"></span>Loading report…</div>
               <div id="customReportSummary" class="small-note">Open this tab to load webhook records.</div>
               <div class="table-wrap">
                 <table id="customReportTable">

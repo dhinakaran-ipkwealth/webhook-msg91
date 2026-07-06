@@ -1094,6 +1094,140 @@ function getMongoConfig() {
   };
 }
 
+// ── per-template collection helpers ──────────────────────────────────────────
+// Each MSG91 template gets its own whatsapp_sender_reports_<template> /
+// whatsapp_webhook_events_<template> collection so regulated templates (e.g.
+// trading_confirmation, audited for SEBI) stay isolated from other traffic.
+// Mirrors backend/lib/template-collections.js — keep both in sync since the
+// Electron app and the webhook server write to the same MongoDB collections.
+function sanitizeTemplateName(name) {
+  const cleaned = String(name || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return cleaned || null;
+}
+
+function templateCollectionName(baseName, templateName) {
+  const sanitized = sanitizeTemplateName(templateName);
+  return sanitized ? `${baseName}_${sanitized}` : baseName;
+}
+
+// Every whatsapp_uploads doc already records templateName, so that collection
+// is the source of truth for "which templates exist" — no separate registry.
+// Always includes baseName itself for unclassified/legacy rows.
+async function getKnownCollectionNames(db, baseName) {
+  const names = new Set([baseName]);
+  try {
+    const templateNames = await db
+      .collection("whatsapp_uploads")
+      .distinct("templateName");
+    templateNames.forEach((name) =>
+      names.add(templateCollectionName(baseName, name)),
+    );
+  } catch (error) {
+    console.warn(
+      `Failed to list known templates for ${baseName}:`,
+      error.message,
+    );
+  }
+  return [...names];
+}
+
+// Lazily create indexes on a per-template collection the first time this
+// process touches it, memoized for the lifetime of the process.
+const indexedTemplateCollections = new Set();
+
+async function ensureIndexesOnce(collection, indexDefs) {
+  const name = collection.collectionName;
+  if (indexedTemplateCollections.has(name)) return;
+  indexedTemplateCollections.add(name);
+  for (const { key, options } of indexDefs) {
+    await safeCreateIndex(collection, key, options || {});
+  }
+}
+
+const SENDER_REPORTS_INDEX_DEFS = [
+  {
+    key: { senderNumber: 1, templateName: 1, uploadId: 1, numberId: 1 },
+    options: { unique: true },
+  },
+  { key: { uploadId: 1, numberId: 1 } },
+  { key: { senderNumber: 1, teamLabel: 1, updatedAt: -1 } },
+];
+
+const WEBHOOK_EVENTS_INDEX_DEFS = [
+  { key: { receivedAt: -1 } },
+  { key: { matchedUploadId: 1, receivedAt: -1 } },
+  { key: { uploadId: 1, receivedAt: -1 } },
+  { key: { source: 1, receivedAt: -1 } },
+  { key: { source: 1, sourceEventId: 1 } },
+  { key: { normalizedMobile: 1, receivedAt: -1 } },
+  { key: { eventType: 1, normalizedStatus: 1, receivedAt: -1 } },
+  { key: { eventKey: 1 }, options: { unique: true } },
+  { key: { stableKey: 1 }, options: { sparse: true } },
+  {
+    key: { source: 1, stableKey: 1 },
+    options: {
+      unique: true,
+      partialFilterExpression: { stableKey: { $type: "string" } },
+    },
+  },
+  { key: { modifiedAt: -1 } },
+];
+
+async function getSenderReportsCollection(templateName) {
+  const name = templateCollectionName("whatsapp_sender_reports", templateName);
+  const collection = mongoDb.collection(name);
+  await ensureIndexesOnce(collection, SENDER_REPORTS_INDEX_DEFS);
+  return collection;
+}
+
+async function getWebhookEventsCollection(templateName) {
+  const name = templateCollectionName("whatsapp_webhook_events", templateName);
+  const collection = webhookEventsDb.collection(name);
+  await ensureIndexesOnce(collection, WEBHOOK_EVENTS_INDEX_DEFS);
+  return collection;
+}
+
+// A specific template filter can arrive as the raw MSG91 name, a display
+// label with language suffix, etc. (see getTemplateFilterCandidates below).
+// Resolve every plausible physical collection name for it so read queries
+// aren't tripped up by a label/raw-name mismatch against the write-side
+// collection routing (which always keys off the raw templateName field).
+// Returns null when there's no specific filter (i.e. "all templates").
+function resolveTemplateCollectionCandidates(baseName, templateNameFilter) {
+  const candidates = getTemplateFilterCandidates(templateNameFilter);
+  if (!candidates.length) return null;
+  return [...new Set(candidates.map((c) => templateCollectionName(baseName, c)))];
+}
+
+// Query `query` against either a specific set of collections (fast path) or
+// every known per-template collection (fan-out via $unionWith), preserving
+// the shape of a plain `.find(query).sort(sort).limit(limit)` call.
+async function findAcrossTemplateCollections(db, baseName, query, options = {}) {
+  const { sort, limit } = options;
+  const collectionNames =
+    options.collectionNames || (await getKnownCollectionNames(db, baseName));
+
+  if (collectionNames.length === 1) {
+    let cursor = db.collection(collectionNames[0]).find(query);
+    if (sort) cursor = cursor.sort(sort);
+    if (limit) cursor = cursor.limit(limit);
+    return cursor.toArray();
+  }
+
+  const [firstName, ...restNames] = collectionNames;
+  const pipeline = [{ $match: query }];
+  restNames.forEach((name) => {
+    pipeline.push({ $unionWith: { coll: name, pipeline: [{ $match: query }] } });
+  });
+  if (sort) pipeline.push({ $sort: sort });
+  if (limit) pipeline.push({ $limit: limit });
+  return db.collection(firstName).aggregate(pipeline).toArray();
+}
+
 async function initMongo() {
   if (mongoDb && mongoClient) return mongoDb;
 
@@ -1239,6 +1373,11 @@ async function initMongo() {
       teamLabel: 1,
       updatedAt: -1,
     });
+
+    // Pre-warm the priority audited template so its collections/indexes exist
+    // from process start rather than being created lazily on first use.
+    await getSenderReportsCollection("trading_confirmation");
+    await getWebhookEventsCollection("trading_confirmation");
 
     console.log("MongoDB indexes verified.");
 
@@ -1668,11 +1807,6 @@ async function getNumbersCollection() {
   return mongoDb.collection("whatsapp_numbers");
 }
 
-async function getWebhookEventsCollection() {
-  if (!mongoDb) throw new Error("MongoDB is not connected.");
-  return webhookEventsDb.collection("whatsapp_webhook_events");
-}
-
 function normalizeMongoDoc(doc) {
   if (!doc) return doc;
   const clone = { ...doc };
@@ -1883,17 +2017,41 @@ async function findSenderReportForOutboundEvent(event) {
       event?.rawPayload?.["Customer Number"] ||
       "",
   );
-  const senderReports = mongoDb.collection("whatsapp_sender_reports");
 
-  if (requestId) {
+  const primaryCollectionName = event?.templateName
+    ? templateCollectionName("whatsapp_sender_reports", event.templateName)
+    : null;
+
+  async function findByRequestId(collectionName) {
+    if (!requestId) return null;
     const query = {
       $or: [{ responseId: requestId }, { messageId: requestId }],
     };
     if (mobile) query.mobile = mobile;
-    const direct = await senderReports.findOne(query, {
+    return mongoDb.collection(collectionName).findOne(query, {
       sort: { sentAt: -1, updatedAt: -1, _id: -1 },
     });
+  }
+
+  if (primaryCollectionName) {
+    const direct = await findByRequestId(primaryCollectionName);
     if (direct) return direct;
+  }
+
+  // Fall back to scanning every known template's sender-reports collection —
+  // covers events whose templateName is missing/unreliable or that predate
+  // the per-template split.
+  const allCollectionNames = await getKnownCollectionNames(
+    mongoDb,
+    "whatsapp_sender_reports",
+  );
+
+  if (requestId) {
+    for (const collectionName of allCollectionNames) {
+      if (collectionName === primaryCollectionName) continue;
+      const direct = await findByRequestId(collectionName);
+      if (direct) return direct;
+    }
   }
 
   if (!mobile) return null;
@@ -1906,19 +2064,21 @@ async function findSenderReportForOutboundEvent(event) {
   if (uploadId) query.uploadId = Number(uploadId);
   if (event.templateName) query.templateName = event.templateName;
 
-  const candidates = await senderReports
-    .find(query)
-    .sort({ sentAt: -1, updatedAt: -1, _id: -1 })
-    .limit(100)
-    .toArray();
-
   let best = null;
   let bestScore = 0;
-  for (const candidate of candidates) {
-    const score = scoreSenderReportMatch(candidate, values);
-    if (score > bestScore) {
-      best = candidate;
-      bestScore = score;
+  for (const collectionName of allCollectionNames) {
+    const candidates = await mongoDb
+      .collection(collectionName)
+      .find(query)
+      .sort({ sentAt: -1, updatedAt: -1, _id: -1 })
+      .limit(100)
+      .toArray();
+    for (const candidate of candidates) {
+      const score = scoreSenderReportMatch(candidate, values);
+      if (score > bestScore) {
+        best = candidate;
+        bestScore = score;
+      }
     }
   }
 
@@ -2066,7 +2226,7 @@ async function hasProcessedRemoteEvent(sourceEventId) {
 
 async function upsertWebhookEventDoc(doc) {
   await requireMongoDb();
-  const webhooks = webhookEventsDb.collection("whatsapp_webhook_events");
+  const webhooks = await getWebhookEventsCollection(doc.templateName);
   const now = new Date().toISOString();
 
   if (doc.rawPayload && typeof doc.rawPayload === "string") {
@@ -2359,12 +2519,20 @@ async function listCustomReportRowsFromMongo(filters = {}) {
     ];
   }
 
-  const events = await webhookEventsDb
-    .collection("whatsapp_webhook_events")
-    .find(query)
-    .sort({ receivedAt: -1, statusUpdatedAt: -1, updatedAt: -1, _id: -1 })
-    .limit(5000)
-    .toArray();
+  const events = await findAcrossTemplateCollections(
+    webhookEventsDb,
+    "whatsapp_webhook_events",
+    query,
+    {
+      sort: { receivedAt: -1, statusUpdatedAt: -1, updatedAt: -1, _id: -1 },
+      limit: 5000,
+      collectionNames:
+        resolveTemplateCollectionCandidates(
+          "whatsapp_webhook_events",
+          filters.templateName,
+        ) || undefined,
+    },
+  );
 
   const rows = await Promise.all(
     events.map(async (event, index) => {
@@ -2501,12 +2669,20 @@ async function listSenderReportRowsForCustomReport(filters = {}) {
     );
   }
 
-  const senderReports = await mongoDb
-    .collection("whatsapp_sender_reports")
-    .find(query)
-    .sort({ sentAt: -1, requestedAt: -1, _id: -1 })
-    .limit(5000)
-    .toArray();
+  const senderReports = await findAcrossTemplateCollections(
+    mongoDb,
+    "whatsapp_sender_reports",
+    query,
+    {
+      sort: { sentAt: -1, requestedAt: -1, _id: -1 },
+      limit: 5000,
+      collectionNames:
+        resolveTemplateCollectionCandidates(
+          "whatsapp_sender_reports",
+          filters.templateName,
+        ) || undefined,
+    },
+  );
 
   const uploadIds = [
     ...new Set(
@@ -2982,7 +3158,7 @@ async function getMatchedSentMessageForInboundWebhookEvent(event) {
     if (numberRow?.sentMessage) return numberRow.sentMessage;
 
     const senderReport = await mongoDb
-      .collection("whatsapp_sender_reports")
+      .collection(templateCollectionName("whatsapp_sender_reports", event.templateName))
       .findOne(
         {
           uploadId: matchedUploadId,
@@ -3171,7 +3347,17 @@ function getSenderReportFilter(uploadId, numberId) {
 }
 
 async function mirrorSenderReport(update) {
-  await mirrorMongo("whatsapp_sender_reports", (collection) =>
+  const collectionName = templateCollectionName(
+    "whatsapp_sender_reports",
+    update.templateName,
+  );
+  if (mongoDb) {
+    await ensureIndexesOnce(
+      mongoDb.collection(collectionName),
+      SENDER_REPORTS_INDEX_DEFS,
+    );
+  }
+  await mirrorMongo(collectionName, (collection) =>
     collection.updateOne(
       getSenderReportFilter(update.uploadId, update.numberId),
       {
@@ -3799,9 +3985,12 @@ async function syncMongoWebhookEvents() {
   // row and write matched IDs back to the webhook event for auditability.
   if (!mongoDb || !webhookEventsDb) return;
 
-  const events = await webhookEventsDb
-    .collection("whatsapp_webhook_events")
-    .find({
+  // Reconciliation sweep has no template context up front, so it must scan
+  // every known whatsapp_webhook_events_<template> collection.
+  const events = await findAcrossTemplateCollections(
+    webhookEventsDb,
+    "whatsapp_webhook_events",
+    {
       eventType: "outbound",
       normalizedStatus: { $in: ["delivered", "failed"] },
       $or: [
@@ -3810,18 +3999,25 @@ async function syncMongoWebhookEvents() {
         { outboundStatusAppliedAt: { $exists: false } },
       ],
       outboundStatusSkippedAt: { $exists: false },
-    })
-    .sort({ statusUpdatedAt: -1, receivedAt: -1, updatedAt: -1, _id: -1 })
-    .limit(250)
-    .toArray();
+    },
+    {
+      sort: { statusUpdatedAt: -1, receivedAt: -1, updatedAt: -1, _id: -1 },
+      limit: 250,
+    },
+  );
 
   let applied = 0;
   let skipped = 0;
   for (const event of events) {
+    // Each event's own templateName field is the routing key it was stored
+    // under — reuse it rather than tracking which collection it came from.
+    const eventCollection = webhookEventsDb.collection(
+      templateCollectionName("whatsapp_webhook_events", event.templateName),
+    );
     const status = createStatusLabel(event.normalizedStatus);
     const senderReport = await findSenderReportForOutboundEvent(event);
     if (!senderReport?.uploadId || !senderReport?.numberId) {
-      await webhookEventsDb.collection("whatsapp_webhook_events").updateOne(
+      await eventCollection.updateOne(
         { _id: event._id },
         {
           $set: {
@@ -3850,19 +4046,26 @@ async function syncMongoWebhookEvents() {
       new Date().toISOString();
     const now = new Date().toISOString();
 
-    await mongoDb.collection("whatsapp_sender_reports").updateOne(
-      { _id: senderReport._id },
-      {
-        $set: {
-          currentStatus: status,
-          deliveryStatus: status,
-          responseId,
-          messageId: responseId,
-          reportWebhook: event,
-          updatedAt: now,
+    await mongoDb
+      .collection(
+        templateCollectionName(
+          "whatsapp_sender_reports",
+          senderReport.templateName,
+        ),
+      )
+      .updateOne(
+        { _id: senderReport._id },
+        {
+          $set: {
+            currentStatus: status,
+            deliveryStatus: status,
+            responseId,
+            messageId: responseId,
+            reportWebhook: event,
+            updatedAt: now,
+          },
         },
-      },
-    );
+      );
 
     await mongoDb.collection("whatsapp_numbers").updateOne(
       {
@@ -3882,7 +4085,7 @@ async function syncMongoWebhookEvents() {
       },
     );
 
-    await webhookEventsDb.collection("whatsapp_webhook_events").updateOne(
+    await eventCollection.updateOne(
       { _id: event._id },
       {
         $set: {
@@ -4683,6 +4886,9 @@ function startWebhookServer() {
 
 async function getSenderReportMapForUpload(uploadId) {
   await requireMongoDb();
+  // An upload always uses exactly one template, so its sender reports live
+  // entirely in one collection — resolve it once instead of fanning out.
+  const upload = await getUploadById(uploadId);
   const uploadNumberRows = await mongoDb
     .collection("whatsapp_numbers")
     .find(
@@ -4696,8 +4902,7 @@ async function getSenderReportMapForUpload(uploadId) {
     if (mobile) mobileCounts.set(mobile, (mobileCounts.get(mobile) || 0) + 1);
   });
 
-  const senderReports = await mongoDb
-    .collection("whatsapp_sender_reports")
+  const senderReports = await (await getSenderReportsCollection(upload?.templateName))
     .find({ uploadId: Number(uploadId) })
     .sort({ updatedAt: -1, sentAt: -1, _id: -1 })
     .toArray();
@@ -4726,6 +4931,9 @@ async function getSenderReportMapForUpload(uploadId) {
 
 async function getInboundReplyMapForUpload(uploadId) {
   await requireMongoDb();
+  // Same reasoning as getSenderReportMapForUpload: one upload = one template
+  // = one webhook-events collection, resolved up front.
+  const upload = await getUploadById(uploadId);
   const uploadNumberRows = await mongoDb
     .collection("whatsapp_numbers")
     .find(
@@ -4755,8 +4963,7 @@ async function getInboundReplyMapForUpload(uploadId) {
     ];
   });
 
-  const events = await webhookEventsDb
-    .collection("whatsapp_webhook_events")
+  const events = await (await getWebhookEventsCollection(upload?.templateName))
     .find({
       eventType: "inbound",
       $or: [
@@ -5015,7 +5222,6 @@ ipcMain.handle("fetch-custom-report", async (event, filters = {}) => {
 
 ipcMain.handle("fetch-sender-stats", async (event, filters = {}) => {
   await requireMongoDb();
-  const senderReports = mongoDb.collection("whatsapp_sender_reports");
 
   const match = {};
   if (filters.todayOnly) {
@@ -5030,8 +5236,16 @@ ipcMain.handle("fetch-sender-stats", async (event, filters = {}) => {
       match.sentAt.$lt = new Date(filters.endDateTime).toISOString();
   }
 
+  // No template filter here — stats are always "across everything" — so fan
+  // out over every known per-template sender-reports collection.
+  const [firstCollectionName, ...restCollectionNames] =
+    await getKnownCollectionNames(mongoDb, "whatsapp_sender_reports");
+
   const pipeline = [
     { $match: match },
+    ...restCollectionNames.map((name) => ({
+      $unionWith: { coll: name, pipeline: [{ $match: match }] },
+    })),
     {
       $group: {
         _id: null,
@@ -5055,7 +5269,10 @@ ipcMain.handle("fetch-sender-stats", async (event, filters = {}) => {
     },
   ];
 
-  const agg = await senderReports.aggregate(pipeline).toArray();
+  const agg = await mongoDb
+    .collection(firstCollectionName)
+    .aggregate(pipeline)
+    .toArray();
   const row = agg[0] || { totalSends: 0, templates: [], responses: 0 };
   return {
     totalSends: row.totalSends || 0,

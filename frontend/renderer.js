@@ -80,6 +80,7 @@ const customReportSummaryGrid = document.getElementById(
   "customReportSummaryGrid",
 );
 const customReportTableBody = document.getElementById("customReportTableBody");
+const customReportLoading = document.getElementById("customReportLoading");
 const sendButton = document.getElementById("sendButton");
 const refreshButton = document.getElementById("refreshButton");
 const deliveryReportRefreshButton = document.getElementById(
@@ -92,6 +93,12 @@ if (!saasAlertContainer) {
 }
 
 let selectedUploadId = null;
+// True only when the user explicitly picked an upload (CSV upload, "Select"
+// button). The periodic auto-refresh also defaults selectedUploadId to the
+// most recent upload so the Delivery Report panel isn't blank on load, but
+// that auto-pick must NOT flip the Custom Report scope to "Selected upload
+// report" out from under someone browsing "All transactions".
+let selectedUploadIsExplicit = false;
 let lastPreviewRows = [];
 let lastCustomReportRows = [];
 let lastReportRows = [];
@@ -160,6 +167,7 @@ csvInput.addEventListener("change", async (event) => {
 
     const result = await window.electronAPI.parseCsvFile(file.path);
     selectedUploadId = result.upload.id;
+    selectedUploadIsExplicit = true;
     customFiltersTouched = false;
     currentUploadLabel.textContent = `Selected: ${result.upload.fileName}`;
 
@@ -1130,7 +1138,7 @@ function syncCampaignSelectorsFromUpload(upload) {
 function syncCustomReportFiltersToCampaign(force = false) {
   if (!force && customFiltersTouched) return;
 
-  customScope.value = selectedUploadId ? "selected" : "all";
+  customScope.value = selectedUploadIsExplicit && selectedUploadId ? "selected" : "all";
   customEventType.value = "all";
   customStatus.value = "all";
   const selectedNumber = getSelectedNumber();
@@ -1440,6 +1448,7 @@ function renderUploadTable(uploads) {
       );
       if (event.target.dataset.uploadId) {
         selectedUploadId = uploadId;
+        selectedUploadIsExplicit = true;
         const uploads = await window.electronAPI.fetchUploads();
         const upload = uploads.find((item) => item.id === uploadId);
         if (upload) {
@@ -2359,13 +2368,19 @@ function renderCustomSummary(rows) {
     .join("");
 }
 
+function setCustomReportLoading(isLoading) {
+  if (customReportLoading) customReportLoading.hidden = !isLoading;
+}
+
 async function refreshCustomReport() {
   if (customReportRefreshInProgress) return;
   customReportRefreshInProgress = true;
+  setCustomReportLoading(true);
   try {
     await _doRefreshCustomReport();
   } finally {
     customReportRefreshInProgress = false;
+    setCustomReportLoading(false);
   }
 }
 
