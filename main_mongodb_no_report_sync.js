@@ -1891,6 +1891,78 @@ async function findNumberByWebhookContent(normalized, context = {}) {
     : null;
 }
 
+function scoreSenderReportMatch(report, values) {
+  if (!values.length) return 0;
+  const reportText = [
+    report.sentMessage,
+    report.mobile,
+    typeof report.csvRowData === "string"
+      ? report.csvRowData
+      : JSON.stringify(report.csvRowData || {}),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return values.reduce((score, value) => {
+    return reportText.includes(String(value).toLowerCase())
+      ? score + 1
+      : score;
+  }, 0);
+}
+
+async function findSenderReportForOutboundEvent(event) {
+  await requireMongoDb();
+  const requestId = event?.requestId ? String(event.requestId) : "";
+  const mobile = formatPhoneForCall(
+    event?.normalizedMobile ||
+      event?.customerNumber ||
+      event?.rawPayload?.customerNumber ||
+      event?.rawPayload?.["Customer Number"] ||
+      "",
+  );
+  const senderReports = mongoDb.collection("whatsapp_sender_reports");
+
+  if (requestId) {
+    const query = {
+      $or: [{ responseId: requestId }, { messageId: requestId }],
+    };
+    if (mobile) query.mobile = mobile;
+    const direct = await senderReports.findOne(query, {
+      sort: { sentAt: -1, updatedAt: -1, _id: -1 },
+    });
+    if (direct) return direct;
+  }
+
+  if (!mobile) return null;
+
+  const values = extractWebhookContentValues(event.rawPayload || event);
+  if (!values.length) return null;
+
+  const query = { mobile };
+  const uploadId = event.uploadId || event.matchedUploadId || null;
+  if (uploadId) query.uploadId = Number(uploadId);
+  if (event.templateName) query.templateName = event.templateName;
+
+  const candidates = await senderReports
+    .find(query)
+    .sort({ sentAt: -1, updatedAt: -1, _id: -1 })
+    .limit(100)
+    .toArray();
+
+  let best = null;
+  let bestScore = 0;
+  for (const candidate of candidates) {
+    const score = scoreSenderReportMatch(candidate, values);
+    if (score > bestScore) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+
+  return best && bestScore >= 2 ? best : null;
+}
+
 async function findLatestNumberForWebhook(normalized, context = {}) {
   if (!normalized?.normalizedMobile) return null;
   const directMatch = await findNumberByMessageKey(normalized, context);
@@ -2442,7 +2514,7 @@ async function listSenderReportRowsForCustomReport(filters = {}) {
   const query = {};
   addDateFieldConditions(
     query,
-    ["sentAt", "updatedAt", "lastReplyAt"],
+    ["sentAt", "requestedAt"],
     filters,
   );
 
@@ -2473,7 +2545,7 @@ async function listSenderReportRowsForCustomReport(filters = {}) {
   const senderReports = await mongoDb
     .collection("whatsapp_sender_reports")
     .find(query)
-    .sort({ updatedAt: -1, sentAt: -1, _id: -1 })
+    .sort({ sentAt: -1, requestedAt: -1, _id: -1 })
     .limit(5000)
     .toArray();
 
@@ -3213,6 +3285,7 @@ function normalizeWebhookItem(item) {
       item.number ||
       item.phone ||
       item.customerNumber ||
+      item["Customer Number"] ||
       item.customer_number ||
       item.customerMobile ||
       item.customer_mobile ||
@@ -3224,6 +3297,8 @@ function normalizeWebhookItem(item) {
       item.state ||
       item.delivery_status ||
       item.deliveryStatus ||
+      item["Delivery Report"] ||
+      item.delivery_report ||
       item.message_status ||
       item.messageStatus ||
       item.report_status ||
@@ -3237,8 +3312,10 @@ function normalizeWebhookItem(item) {
       item.message_uuid ||
       item.messageUuid ||
       item.uuid ||
+      item.UUID ||
       item.request_id ||
       item.requestId ||
+      item["Request Id"] ||
       item.one_api_request_id ||
       item.oneApiRequestId ||
       item["Request ID"] ||
@@ -3250,6 +3327,7 @@ function normalizeWebhookItem(item) {
       item.integrated_number ||
       item.senderNumber ||
       item.sender_number ||
+      item["Whatsapp Number"] ||
       item.from ||
       item["Integrated Number"] ||
       null,
@@ -3257,6 +3335,7 @@ function normalizeWebhookItem(item) {
       item.templateName ||
       item.template_name ||
       item.template ||
+      item.Template ||
       item.campaignName ||
       item.campaign_name ||
       item["Template Name"] ||
@@ -3266,8 +3345,13 @@ function normalizeWebhookItem(item) {
       item.status_updated_at ||
       item.deliveredAt ||
       item.delivered_at ||
+      item["Delivered At"] ||
       item.readAt ||
       item.read_at ||
+      item["Read At"] ||
+      item.sentAt ||
+      item.sent_at ||
+      item["Sent At"] ||
       item.updatedAt ||
       item.updated_at ||
       item["Delivered Time"] ||
@@ -3758,13 +3842,114 @@ async function isRemoteWebhookEventProcessed(sourceEventId) {
 }
 
 async function syncMongoWebhookEvents() {
-  // The EC2 webhook-server.js writes events to whatsapp_webhook_events and
-  // updates whatsapp_sender_reports and whatsapp_numbers directly in MongoDB.
-  // Re-processing those events here created duplicate documents and caused
-  // every reply/status to appear twice in the UI. The polling loop already
-  // calls sendStateUpdate() after this function, which is sufficient to
-  // refresh the UI with the latest state from MongoDB.
-  if (!mongoDb) return;
+  // Inbound replies are already applied by EC2 webhook-server.js; do not
+  // reprocess them here or reply histories get duplicated. Outbound delivery
+  // events are safe to reconcile idempotently because they update one status
+  // row and write matched IDs back to the webhook event for auditability.
+  if (!mongoDb || !webhookEventsDb) return;
+
+  const events = await webhookEventsDb
+    .collection("whatsapp_webhook_events")
+    .find({
+      eventType: "outbound",
+      normalizedStatus: { $in: ["delivered", "failed"] },
+      $or: [
+        { matchedNumberId: null },
+        { matchedNumberId: { $exists: false } },
+        { outboundStatusAppliedAt: { $exists: false } },
+      ],
+      outboundStatusSkippedAt: { $exists: false },
+    })
+    .sort({ statusUpdatedAt: -1, receivedAt: -1, updatedAt: -1, _id: -1 })
+    .limit(250)
+    .toArray();
+
+  let applied = 0;
+  let skipped = 0;
+  for (const event of events) {
+    const status = createStatusLabel(event.normalizedStatus);
+    const senderReport = await findSenderReportForOutboundEvent(event);
+    if (!senderReport?.uploadId || !senderReport?.numberId) {
+      await webhookEventsDb.collection("whatsapp_webhook_events").updateOne(
+        { _id: event._id },
+        {
+          $set: {
+            outboundStatusSkippedAt: new Date().toISOString(),
+            outboundStatusSkipReason: "no_matching_sender_report",
+          },
+        },
+      );
+      skipped += 1;
+      continue;
+    }
+
+    const responseId =
+      event.requestId ||
+      event.rawPayload?.uuid ||
+      event.rawPayload?.UUID ||
+      senderReport.responseId ||
+      senderReport.messageId ||
+      null;
+    const statusAt =
+      event.statusUpdatedAt ||
+      event.rawPayload?.["Read At"] ||
+      event.rawPayload?.["Delivered At"] ||
+      event.rawPayload?.["Sent At"] ||
+      event.receivedAt ||
+      new Date().toISOString();
+    const now = new Date().toISOString();
+
+    await mongoDb.collection("whatsapp_sender_reports").updateOne(
+      { _id: senderReport._id },
+      {
+        $set: {
+          currentStatus: status,
+          deliveryStatus: status,
+          responseId,
+          messageId: responseId,
+          reportWebhook: event,
+          updatedAt: now,
+        },
+      },
+    );
+
+    await mongoDb.collection("whatsapp_numbers").updateOne(
+      {
+        uploadId: Number(senderReport.uploadId),
+        numberId: Number(senderReport.numberId),
+      },
+      {
+        $set: {
+          currentStatus: status,
+          deliveryStatus: status,
+          responseId,
+          messageId: responseId,
+          responseDetails: event,
+          lastUpdated: statusAt,
+          updatedAt: now,
+        },
+      },
+    );
+
+    await webhookEventsDb.collection("whatsapp_webhook_events").updateOne(
+      { _id: event._id },
+      {
+        $set: {
+          matchedUploadId: Number(senderReport.uploadId),
+          matchedNumberId: Number(senderReport.numberId),
+          outboundStatusAppliedAt: now,
+          modifiedAt: now,
+        },
+      },
+    );
+    applied += 1;
+  }
+
+  if (applied || skipped) {
+    console.log(
+      `Outbound webhook reconciliation: applied ${applied}, skipped ${skipped}.`,
+    );
+  }
 }
 
 function toMsg91Date(value) {
@@ -3829,6 +4014,45 @@ function reportItemMatchesUploadContext(normalized, upload) {
   return true;
 }
 
+function getReportItemSentTime(item = {}) {
+  const value =
+    item.sentAt ||
+    item.sent_at ||
+    item["Sent At"] ||
+    item.dateTime ||
+    item.date_time ||
+    item["Date Time"] ||
+    item.requestedAt ||
+    item.requested_at ||
+    "";
+  if (!value) return 0;
+  const msg91Match = String(value).match(
+    /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/,
+  );
+  if (msg91Match) {
+    const [, y, mo, d, h, mi, s = "0"] = msg91Match;
+    return Date.UTC(
+      Number(y),
+      Number(mo) - 1,
+      Number(d),
+      Number(h) - 5,
+      Number(mi) - 30,
+      Number(s),
+    );
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 0 : date.getTime();
+}
+
+function reportItemMatchesUploadTime(item, upload) {
+  const itemTime = getReportItemSentTime(item);
+  const uploadTime = new Date(
+    upload.sentAt || upload.triggeredAt || upload.createdAt || 0,
+  ).getTime();
+  if (!itemTime || !uploadTime || Number.isNaN(uploadTime)) return true;
+  return Math.abs(itemTime - uploadTime) <= 60 * 60 * 1000;
+}
+
 async function applyReportItemsToUpload(
   upload,
   rawItems,
@@ -3844,6 +4068,8 @@ async function applyReportItemsToUpload(
           id: 1,
           cleaned: 1,
           original: 1,
+          data: 1,
+          sentMessage: 1,
           responseId: 1,
           messageId: 1,
         },
@@ -3861,7 +4087,11 @@ async function applyReportItemsToUpload(
 
   for (const item of items) {
     const normalized = normalizeWebhookItem(item);
-    if (!normalized || !reportItemMatchesUploadContext(normalized, upload)) {
+    if (
+      !normalized ||
+      !reportItemMatchesUploadContext(normalized, upload) ||
+      !reportItemMatchesUploadTime(item, upload)
+    ) {
       skipped += 1;
       continue;
     }
@@ -3870,21 +4100,38 @@ async function applyReportItemsToUpload(
     const responseId = normalized.responseId
       ? String(normalized.responseId)
       : "";
-    const candidates = uploadRows.filter((row) => {
-      if (
-        responseId &&
-        (String(row.responseId || "") === responseId ||
-          String(row.messageId || "") === responseId)
-      ) {
-        return true;
+    let candidates = responseId
+      ? uploadRows.filter(
+          (row) =>
+            String(row.responseId || "") === responseId ||
+            String(row.messageId || "") === responseId,
+        )
+      : [];
+
+    if (!candidates.length && cleaned) {
+      const mobileRows = uploadRows.filter(
+        (row) => formatPhoneForCall(row.cleaned || row.original || "") === cleaned,
+      );
+      if (mobileRows.length === 1) {
+        candidates = mobileRows;
+      } else if (mobileRows.length > 1) {
+        const values = extractWebhookContentValues(item);
+        let best = null;
+        let bestScore = 0;
+        let tiedBest = false;
+        for (const row of mobileRows) {
+          const score = scoreWebhookNumberMatch(row, values);
+          if (score > bestScore) {
+            best = row;
+            bestScore = score;
+            tiedBest = false;
+          } else if (score === bestScore && score > 0) {
+            tiedBest = true;
+          }
+        }
+        if (best && bestScore >= 2 && !tiedBest) candidates = [best];
       }
-      if (!responseId && cleaned && mobileCounts.get(cleaned) === 1) {
-        return (
-          formatPhoneForCall(row.cleaned || row.original || "") === cleaned
-        );
-      }
-      return false;
-    });
+    }
 
     if (candidates.length !== 1) {
       skipped += 1;
@@ -4171,11 +4418,11 @@ function getPdfSummaryHtml(rows, options = {}) {
     ["Report type", options.reportType || "IPK Wealth Communications"],
     ["Date range", options.dateRange || "Webhook event range"],
     ["Total Customers", String(outboundRows.length)],
-    ["Unique Customer Mobiles", String(uniqueCustomers)],
+    ["Unique Customers", String(uniqueCustomers)],
     ["Read", String(deliveredCount)],
     ["Customer Replies", String(replyCount)],
-    ["Awaiting Delivery Update", String(pendingCount)],
-    ["Failed / Technical Issues", String(failedCount)],
+    ["Delivery Pending", String(pendingCount)],
+    ["Failed/Tech Issues", String(failedCount)],
   ];
 
   return `<table class="summary-table"><tbody>${summaryRows
@@ -4326,11 +4573,11 @@ function formatDateRangeForReport(filters, rows) {
   if (end) return `Until ${end}`;
 
   // No explicit filter window (e.g. a single upload's export) - fall back to
-  // the actual earliest/latest event timestamps present in the report rows.
+  // the actual earliest/latest transaction timestamps present in the rows.
   const timestamps = rows
     .map(
       (row) =>
-        row.receivedAt || row.statusUpdatedAt || row.requestedAt || row.sentAt,
+        row.requestedAt || row.sentAt || row.receivedAt || row.statusUpdatedAt,
     )
     .filter(Boolean)
     .map((value) => new Date(value).getTime())
@@ -5111,27 +5358,27 @@ function reportRowMatchesSearch(row, search) {
 
 function reportRowMatchesDateRange(row, filters = {}) {
   if (!filters.startDateTime && !filters.endDateTime) return true;
-  // Use the LATEST available timestamp so a row whose delivery webhook arrived
-  // today (but was sent yesterday) correctly matches a "Today" date filter.
-  const times = [
-    row.receivedAt,
-    row.statusUpdatedAt,
-    row.requestedAt,
-    row.lastReplyAt,
-    row.updatedAt,
-  ]
-    .filter(Boolean)
-    .map((v) => new Date(v).getTime())
-    .filter((t) => !Number.isNaN(t) && t > 0);
-  if (!times.length) return false;
-  const latestTime = Math.max(...times);
+  const reportTime = new Date(
+    row.requestedAt ||
+      row.sentAt ||
+      row.sent_at ||
+      row.rawPayload?.["Sent At"] ||
+      row.rawPayload?.["Date Time"] ||
+      row.rawPayload?.sentAt ||
+      row.rawPayload?.sent_at ||
+      row.receivedAt ||
+      row.statusUpdatedAt ||
+      row.updatedAt ||
+      0,
+  ).getTime();
+  if (Number.isNaN(reportTime) || reportTime <= 0) return false;
   if (filters.startDateTime) {
     const start = new Date(filters.startDateTime).getTime();
-    if (!Number.isNaN(start) && latestTime < start) return false;
+    if (!Number.isNaN(start) && reportTime < start) return false;
   }
   if (filters.endDateTime) {
     const end = new Date(filters.endDateTime).getTime();
-    if (!Number.isNaN(end) && latestTime >= end) return false;
+    if (!Number.isNaN(end) && reportTime >= end) return false;
   }
   return true;
 }
@@ -5355,10 +5602,10 @@ async function listSelectedUploadReportRows(filters = {}) {
     })
     .sort((a, b) => {
       const aTime = new Date(
-        a.receivedAt || a.statusUpdatedAt || a.requestedAt || 0,
+        a.requestedAt || a.sentAt || a.receivedAt || a.statusUpdatedAt || 0,
       ).getTime();
       const bTime = new Date(
-        b.receivedAt || b.statusUpdatedAt || b.requestedAt || 0,
+        b.requestedAt || b.sentAt || b.receivedAt || b.statusUpdatedAt || 0,
       ).getTime();
       return bTime - aTime;
     });
@@ -5376,10 +5623,10 @@ async function getCustomReportRows(filters = {}) {
     }))
     .sort((a, b) => {
       const aTime = new Date(
-        a.receivedAt || a.statusUpdatedAt || a.requestedAt || 0,
+        a.requestedAt || a.sentAt || a.receivedAt || a.statusUpdatedAt || 0,
       ).getTime();
       const bTime = new Date(
-        b.receivedAt || b.statusUpdatedAt || b.requestedAt || 0,
+        b.requestedAt || b.sentAt || b.receivedAt || b.statusUpdatedAt || 0,
       ).getTime();
       return bTime - aTime;
     });
@@ -5473,6 +5720,25 @@ function getCustomerNameForReport(row) {
 }
 
 function getDateTimeForReport(row) {
+  if (row?.eventType === "outbound") {
+    const sentValue =
+      row.requestedAt ||
+      row.sentAt ||
+      row.sent_at ||
+      row.rawPayload?.["Sent At"] ||
+      row.rawPayload?.["Date Time"] ||
+      row.rawPayload?.sentAt ||
+      row.rawPayload?.sent_at ||
+      "";
+    if (sentValue) {
+      const date = new Date(sentValue);
+      if (!Number.isNaN(date.getTime())) {
+        return date.toLocaleString();
+      }
+      return String(sentValue).trim();
+    }
+  }
+
   const candidates = [
     row.createdAt,
     row.updatedAt,
@@ -5672,7 +5938,7 @@ function formatSingleRowForExcel(row, index) {
   return {
     "S.No.": index + 1,
     "Date & Time": formatDateTimeForReport(
-      row.receivedAt || row.statusUpdatedAt || row.requestedAt,
+      row.requestedAt || row.sentAt || row.receivedAt || row.statusUpdatedAt,
     ),
     "Customer Name": getCustomerNameForReport(row),
     "Customer Mobile": row.normalizedMobile || row.customerNumber || "",

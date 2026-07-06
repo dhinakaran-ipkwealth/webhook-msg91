@@ -2317,7 +2317,7 @@ function renderCustomSummary(rows) {
       note: "Base count for this report. Delivered + Pending + Failed equals this number.",
     },
     {
-      label: "Unique Customer Mobiles",
+      label: "Unique Customers",
       value: counts.uniqueCustomers,
       note: "Distinct customer mobile numbers in the same sent records.",
     },
@@ -2334,13 +2334,13 @@ function renderCustomSummary(rows) {
       tone: "reply",
     },
     {
-      label: "Awaiting Delivery Update",
+      label: "Delivery Pending",
       value: counts.pending,
       note: "Sent to MSG91, waiting for delivered/read/failed callback.",
       tone: "pending",
     },
     {
-      label: "Failed / Technical Issues",
+      label: "Failed/Tech Issues",
       value: counts.failed,
       note: "MSG91 reported failed, rejected, denied, error, or undelivered.",
       tone: "bad",
@@ -2507,7 +2507,7 @@ async function _doRefreshCustomReport() {
 
     tr.innerHTML = `
       <td>${index + 1}</td>
-      <td>${escapeHtml(displayDate(row.receivedAt || row.statusUpdatedAt || row.requestedAt))}</td>
+      <td>${escapeHtml(displayDate(row.requestedAt || row.sentAt || row.receivedAt || row.statusUpdatedAt))}</td>
       <td style="font-weight: 600; color: var(--text-primary);">${escapeHtml(getCustomerName(row))}</td>
       <td>${mobileHtml}</td>
       <td>${senderHtml}</td>

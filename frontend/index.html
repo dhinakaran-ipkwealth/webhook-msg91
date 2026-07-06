@@ -217,7 +217,7 @@
       .split-panel {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-        gap: 12px;
+        gap: 10px;
         margin: 12px 0;
       }
 
@@ -228,7 +228,7 @@
         border: 1px solid var(--line);
         border-radius: 8px;
         background: #fff;
-        padding: 14px;
+        padding: 12px 14px;
       }
 
       .summary-item strong,
@@ -240,13 +240,15 @@
       }
 
       .summary-item {
-        border-left: 4px solid transparent;
+        box-shadow: none;
       }
 
       .summary-label {
         color: #334155;
-        font-size: 13px;
+        font-size: 12px;
         font-weight: 800;
+        line-height: 1.2;
+        white-space: nowrap;
       }
 
       .summary-item p {
@@ -255,11 +257,6 @@
         font-size: 12px;
         line-height: 1.35;
       }
-
-      .summary-item-good { border-left-color: var(--good); }
-      .summary-item-reply { border-left-color: var(--primary); }
-      .summary-item-pending { border-left-color: #f59e0b; }
-      .summary-item-bad { border-left-color: var(--bad); }
 
       .valid { border-left: 4px solid var(--good); }
       .invalid { border-left: 4px solid var(--bad); }

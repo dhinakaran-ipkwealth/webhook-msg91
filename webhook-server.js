@@ -267,30 +267,38 @@ function getMsg91CorrelationId(item, eventType) {
     return (
       item.replyMsgId ||
       item.reply_msg_id ||
+      item["Reply Msg Id"] ||
+      item["Reply Message Id"] ||
       extractMessageContextId(item.messages) ||
       item.message_id ||
       item.messageId ||
       item.message_uuid ||
       item.uuid ||
+      item.UUID ||
       item.id ||
       item.requestId ||
       item.request_id ||
+      item["Request Id"] ||
       item.oneApiRequestId ||
       item.one_api_request_id ||
+      item["Request ID"] ||
       null
     );
   }
 
   return (
     item.uuid ||
+    item.UUID ||
     item.message_uuid ||
     item.message_id ||
     item.messageId ||
     item.id ||
     item.requestId ||
     item.request_id ||
+    item["Request Id"] ||
     item.oneApiRequestId ||
     item.one_api_request_id ||
+    item["Request ID"] ||
     null
   );
 }
@@ -345,6 +353,7 @@ function getCustomerNumber(item) {
   // all inbound rows appear under your sender number.
   return (
     item.customerNumber ||
+    item["Customer Number"] ||
     item.customer_number ||
     item.from ||
     item.wa_id ||
@@ -371,6 +380,8 @@ function normalizeWebhookItem(item, context = {}) {
     item.reason ||
     item.status ||
     item.delivery_status ||
+    item["Delivery Report"] ||
+    item.delivery_report ||
     item.messageType ||
     item.message_type ||
     item.webhookType ||
@@ -428,13 +439,26 @@ function normalizeWebhookItem(item, context = {}) {
     text,
     requestId,
     templateName:
-      item.templateName || item.template_name || context.templateName || null,
+      item.templateName ||
+      item.template_name ||
+      item.Template ||
+      context.templateName ||
+      null,
     uploadId: item.uploadId || item.upload_id || context.uploadId || null,
     webhookType:
       item.webhookType || item.webhook_type || context.webhookType || "msg91",
     customerNumber:
-      item.customerNumber || item.customer_number || normalizedMobile || null,
-    integratedNumber: item.integratedNumber || item.integrated_number || null,
+      item.customerNumber ||
+      item["Customer Number"] ||
+      item.customer_number ||
+      normalizedMobile ||
+      null,
+    integratedNumber:
+      item.integratedNumber ||
+      item.integrated_number ||
+      item["Whatsapp Number"] ||
+      item["Integrated Number"] ||
+      null,
     contentType: item.contentType || item.content_type || null,
     button: item.button || null,
     interactive: item.interactive || null,
@@ -443,7 +467,13 @@ function normalizeWebhookItem(item, context = {}) {
     eventName: item.eventName || item.event_name || null,
     reason: item.reason || null,
     statusCode: item.statusCode || item.status_code || null,
-    statusUpdatedAt: item.statusUpdatedAt || null,
+    statusUpdatedAt:
+      item.statusUpdatedAt ||
+      item.status_updated_at ||
+      item["Read At"] ||
+      item["Delivered At"] ||
+      item["Sent At"] ||
+      null,
     price: item.price || null,
     rawPayload: item,
     receivedAt,
@@ -829,6 +859,25 @@ async function applyOutboundStatusToReports(event) {
         },
       },
     );
+
+    if (event.eventKey) {
+      webhookEventsDb
+        .collection("whatsapp_webhook_events")
+        .updateOne(
+          { eventKey: event.eventKey },
+          {
+            $set: {
+              matchedUploadId: Number(latestReport.uploadId),
+              matchedNumberId: Number(latestReport.numberId),
+              outboundStatusAppliedAt: now,
+              modifiedAt: now,
+            },
+          },
+        )
+        .catch((err) =>
+          console.warn("[outbound] matchedIds write-back failed:", err.message),
+        );
+    }
   }
 
   return {
