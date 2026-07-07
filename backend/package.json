@@ -5,7 +5,17 @@
   "main": "webhook-server.js",
   "scripts": {
     "start": "node webhook-server.js",
-    "dev": "node --watch webhook-server.js"
+    "dev": "node --watch webhook-server.js",
+    "build": "node scripts/build.js",
+    "pm2:start": "npm run build && pm2 start ecosystem.config.js --env production",
+    "pm2:stop": "pm2 stop ecosystem.config.js",
+    "pm2:restart": "npm run build && pm2 restart ecosystem.config.js --env production",
+    "pm2:reload": "npm run build && pm2 reload ecosystem.config.js --env production",
+    "pm2:delete": "pm2 delete ecosystem.config.js",
+    "pm2:status": "pm2 status webhook-msg91-backend",
+    "pm2:logs": "pm2 logs webhook-msg91-backend",
+    "pm2:startup": "pm2 startup",
+    "pm2:save": "pm2 save"
   },
   "dependencies": {
     "axios": "^1.17.0",
@@ -19,6 +29,6 @@
     "nodemailer": "^8.0.10",
     "rate-limit-redis": "^4.2.0",
     "xlsx": "^0.18.5",
-     "pm2": "^7.0.1"
+    "pm2": "^7.0.1"
   }
 }
