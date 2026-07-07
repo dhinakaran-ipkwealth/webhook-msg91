@@ -255,7 +255,18 @@ function webhookDedupMiddleware(getDb, opts = {}) {
 
       if (res.headersSent) return;
       if (returnAs200) {
-        return res.status(200).json({ received: true, duplicate: true });
+        res.status(200).json({ received: true, duplicate: true });
+        console.log(
+          JSON.stringify({
+            tag: "msg91-ack",
+            ts: new Date().toISOString(),
+            status: 200,
+            outcome: "duplicate",
+            route: req.originalUrl || req.path,
+            ip: req.headers["x-real-ip"] || req.ip,
+          })
+        );
+        return;
       }
       // Non-webhook caller requested 409 Conflict
       return res.status(409).json({ error: "Duplicate event", eventIds });

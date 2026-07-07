@@ -236,6 +236,16 @@ const webhookLimiter = RATE_LIMIT_ENABLED
         );
         if (res.headersSent) return;
         res.status(200).json({ received: true, throttled: true });
+        console.log(
+          JSON.stringify({
+            tag: "msg91-ack",
+            ts: new Date().toISOString(),
+            status: 200,
+            outcome: "throttled",
+            route: req.originalUrl || req.path,
+            ip,
+          })
+        );
       },
     })
   : (_req, _res, next) => next();

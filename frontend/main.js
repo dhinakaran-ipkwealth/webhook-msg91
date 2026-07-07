@@ -5957,22 +5957,84 @@ async function listSelectedUploadReportRows(filters = {}) {
         b.requestedAt || b.sentAt || b.receivedAt || b.statusUpdatedAt || 0,
       ).getTime();
       return bTime - aTime;
-    });
+  });
+}
+
+async function listUploadedDocumentRowsForCustomReport(filters = {}) {
+  await requireMongoDb();
+  const query = {};
+  addDateFieldConditions(query, ["sentAt", "createdAt", "updatedAt"], filters);
+
+  if (filters.filteredNumberId && filters.filteredNumberId !== "all") {
+    const sender = normalizeSenderFilterValue(filters.filteredNumberId);
+    addReportOrCondition(query, [
+      { senderId: sender },
+      { senderNumber: sender },
+      { integratedNumber: sender },
+      { integrated_number: sender },
+    ]);
+  }
+
+  if (filters.templateName && filters.templateName !== "all") {
+    const candidates = getTemplateFilterCandidates(filters.templateName);
+    addReportOrCondition(
+      query,
+      candidates.flatMap((candidate) => [
+        { templateName: candidate },
+        { templateLabel: candidate },
+      ]),
+    );
+  }
+
+  const uploads = await mongoDb
+    .collection("whatsapp_uploads")
+    .find(query)
+    .sort({ sentAt: -1, createdAt: -1, id: -1, uploadId: -1, _id: -1 })
+    .limit(500)
+    .toArray();
+
+  const rows = [];
+  for (const upload of uploads.map(normalizeMongoDoc)) {
+    const uploadId = Number(upload.id || upload.uploadId || 0);
+    if (!uploadId) continue;
+    rows.push(...(await listSelectedUploadReportRows({ ...filters, uploadId })));
+  }
+  return rows;
+}
+
+function getUploadNumberRowKey(row) {
+  const uploadId = row.matchedUploadId || row.uploadId || row.upload?.id;
+  const numberId = row.matchedNumberId || row.numberId || row.id;
+  if (!uploadId || !numberId) return "";
+  return `upload:${String(uploadId).trim()}:number:${String(numberId).trim()}`;
 }
 
 function getCustomReportRowKey(row) {
   const raw = parseJsonField(row.rawPayload, row.rawPayload || {});
-  return [
+  const uploadNumberKey = getUploadNumberRowKey(row);
+  if (uploadNumberKey) return uploadNumberKey;
+
+  const eventKey = [
     row.eventKey,
     row.sourceEventId,
-    row.requestId,
-    row.responseId,
-    row.messageId,
     raw.eventKey,
     raw.uuid,
     raw.UUID,
+  ].find((value) => String(value || "").trim());
+  if (eventKey) return `event:${String(eventKey).trim()}`;
+
+  const requestKey = [
+    row.requestId,
+    row.responseId,
+    row.messageId,
     raw.requestId,
     raw["Request Id"],
+    raw.replyMsgId,
+    raw.oneApiRequestId,
+  ].find((value) => String(value || "").trim());
+  if (requestKey) return `request:${String(requestKey).trim()}`;
+
+  return [
     row.normalizedMobile || row.customerNumber || row.mobile,
     row.receivedAt || row.statusUpdatedAt || row.requestedAt || row.sentAt,
   ]
@@ -6030,12 +6092,13 @@ async function getCustomReportRows(filters = {}) {
     rows = await listSelectedUploadReportRows(filters);
   } else {
     const sentRows = await listSenderReportRowsForCustomReport(filters);
+    const uploadedRows = await listUploadedDocumentRowsForCustomReport(filters);
     const requestKeys = new Set(sentRows.flatMap(getReportRowRequestKeys));
     const mobileKeys = new Set(sentRows.map(getReportRowMobileKey).filter(Boolean));
     const webhookOnlyRows = (await listCustomReportRowsFromMongo(filters)).filter(
       (row) => !webhookRowMatchesSentTransaction(row, requestKeys, mobileKeys),
     );
-    rows = [...sentRows, ...webhookOnlyRows];
+    rows = [...sentRows, ...uploadedRows, ...webhookOnlyRows];
   }
   const seen = new Set();
   return rows.filter((row) => {

@@ -1,20 +1,3 @@
-/**
- * migrate-template-collections.js
- *
- * One-time (re-runnable) migration that copies existing docs for a given
- * MSG91 template out of the shared whatsapp_sender_reports /
- * whatsapp_webhook_events collections into that template's dedicated
- * collection (see backend/lib/template-collections.js).
- *
- * Non-destructive: originals are left in place. Safe to re-run — writes are
- * upserts keyed on each collection's natural unique key, so re-running never
- * creates duplicates.
- *
- * Usage:
- *   node backend/scripts/migrate-template-collections.js --template=trading_confirmation
- *   node backend/scripts/migrate-template-collections.js --template=trading_confirmation --dry-run
- */
-
 "use strict";
 
 require("dotenv").config({ path: require("path").join(__dirname, "..", ".env") });
@@ -38,9 +21,6 @@ function escapeRegex(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-// Match every plausible stored spelling of the template name (exact, raw
-// case-insensitive, and the sanitized snake_case form with spaces/underscores
-// interchangeable) since historical rows may not all use the raw MSG91 name.
 function buildTemplateMatchQuery(template) {
   const sanitized = sanitizeTemplateName(template);
   const variants = new Set(

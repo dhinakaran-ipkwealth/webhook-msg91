@@ -1115,12 +1115,42 @@ async function notifyElectronApp(payload = {}) {
   } catch {}
 }
 
-function ackMsg91Webhook(res, extra = {}) {
+function getRequestIp(req) {
+  return (
+    req.headers["x-real-ip"] ||
+    (req.headers["x-forwarded-for"] || "").split(",")[0].trim() ||
+    req.ip ||
+    "unknown"
+  );
+}
+
+// Structured, greppable confirmation that MSG91 received a 200. Every ack
+// point (normal, duplicate, throttled, or error-forced) logs through here so
+// the PM2 log file can be audited for "did we ALWAYS return 200" across all
+// inbound and outbound webhook traffic.
+function logMsg91Ack(req, res, context = {}, outcome = "ok") {
+  console.log(
+    JSON.stringify({
+      tag: "msg91-ack",
+      ts: new Date().toISOString(),
+      status: res.statusCode,
+      direction: context.webhookType || "unknown",
+      outcome,
+      route: req.originalUrl || req.path,
+      ip: getRequestIp(req),
+      templateName: context.templateName || null,
+      uploadId: context.uploadId || null,
+    }),
+  );
+}
+
+function ackMsg91Webhook(req, res, context = {}, extra = {}) {
   if (res.headersSent) {
     console.warn("[webhook] ackMsg91Webhook called but headers already sent");
     return;
   }
   res.status(200).json({ received: true, ...extra });
+  logMsg91Ack(req, res, context, extra.fallback ? "fallback" : "ok");
 }
 
 function processWebhookAfterAck(body, context, notifyPayload, label) {
@@ -1253,7 +1283,7 @@ async function main() {
     console.log(
       `[webhook] POST /webhook from ${req.ip} — body keys: ${Object.keys(req.body || {}).join(", ")}`,
     );
-    ackMsg91Webhook(res);   //   check point
+    ackMsg91Webhook(req, res, { webhookType: "msg91" });
     processWebhookAfterAck(
       req.body,
       { webhookType: "msg91" },
@@ -1266,7 +1296,7 @@ async function main() {
     console.log(
       `[webhook] POST /webhook/msg91/inbound from ${req.ip} — body keys: ${Object.keys(req.body || {}).join(", ")}`,
     );
-    ackMsg91Webhook(res);
+    ackMsg91Webhook(req, res, { webhookType: "inbound" });
     processWebhookAfterAck(
       req.body,
       { webhookType: "inbound" },
@@ -1279,7 +1309,7 @@ async function main() {
     console.log(
       `[webhook] POST /webhook/msg91/outbound from ${req.ip} — body keys: ${Object.keys(req.body || {}).join(", ")}`,
     );
-    ackMsg91Webhook(res);
+    ackMsg91Webhook(req, res, { webhookType: "outbound_report" });
     processWebhookAfterAck(
       req.body,
       { webhookType: "outbound_report" },
@@ -1297,7 +1327,7 @@ async function main() {
     console.log(
       `[webhook] POST /webhook/msg91/${req.params.templateName}/${req.params.uploadId} from ${req.ip}`,
     );
-    ackMsg91Webhook(res);
+    ackMsg91Webhook(req, res, ctx);
     processWebhookAfterAck(
       req.body,
       ctx,
@@ -1314,7 +1344,7 @@ async function main() {
     console.log(
       `[webhook] POST /webhook/msg91/${req.params.templateName} from ${req.ip}`,
     );
-    ackMsg91Webhook(res);
+    ackMsg91Webhook(req, res, ctx);
     processWebhookAfterAck(
       req.body,
       ctx,
@@ -1329,7 +1359,7 @@ async function main() {
     console.log(
       `[webhook] ${req.method} ${req.originalUrl} from ${req.ip} matched fallback`,
     );
-    ackMsg91Webhook(res, { fallback: true });
+    ackMsg91Webhook(req, res, { webhookType: "msg91" }, { fallback: true });
     if (req.method === "POST") {
       processWebhookAfterAck(
         req.body,
@@ -1348,6 +1378,9 @@ async function main() {
     res
       .status(200)
       .json({ received: true, error: (err && err.message) || String(err) });
+    if (req.path.startsWith("/webhook")) {
+      logMsg91Ack(req, res, {}, "error-forced-200");
+    }
   });
 
   app.listen(PORT, HOST, () => {

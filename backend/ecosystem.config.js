@@ -3,7 +3,7 @@ module.exports = {
     {
       name: "webhook-msg91-backend",
 
-      script: "./webhook-server.js",
+      script: "webhook-server.js",
 
       cwd: "/home/ubuntu/webhook-msg91/backend",
 
