@@ -2162,7 +2162,7 @@ function getDynamicResponse(row) {
 function getFriendlyStatus(row) {
   if (row.customReply || row.lastReplyAt) return "Customer replied";
   if (row.eventType === "inbound") return "Customer replied";
-  if (row.normalizedStatus === "delivered") return "Delivered / read";
+  if (row.normalizedStatus === "delivered") return "Delivered";
   if (row.normalizedStatus === "failed") return "Failed";
   if (row.normalizedStatus === "sent") return "Sent";
   return row.normalizedStatus || "In progress";
@@ -2331,7 +2331,7 @@ function renderCustomSummary(rows) {
       note: "Distinct customer mobile numbers in the same sent records.",
     },
     {
-      label: "Delivered / Read",
+      label: "Delivered",
       value: counts.delivered,
       note: "MSG91 confirmed delivered, read, or success.",
       tone: "good",
@@ -2476,7 +2476,7 @@ async function _doRefreshCustomReport() {
     const friendlyStatus = getFriendlyStatus(row);
     let statusClass = "badge-pending";
     if (friendlyStatus === "Customer replied") statusClass = "badge-replied";
-    else if (friendlyStatus === "Delivered / read")
+    else if (friendlyStatus === "Delivered")
       statusClass = "badge-delivered";
     else if (friendlyStatus === "Failed") statusClass = "badge-failed";
     else if (friendlyStatus === "Sent" || friendlyStatus === "sent")

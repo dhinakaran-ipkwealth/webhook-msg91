@@ -4757,7 +4757,7 @@ function getPdfSummaryHtml(rows, options = {}) {
     ["Date range", options.dateRange || "Webhook event range"],
     ["Total Customers / Sent Records", String(outboundRows.length)],
     ["Unique Customer Mobiles", String(uniqueCustomers)],
-    ["Delivered / Read", String(deliveredCount)],
+    ["Delivered", String(deliveredCount)],
     ["Customer Replies", String(replyCount)],
     ["Awaiting Delivery Update", String(pendingCount)],
     ["Failed / Technical Issues", String(failedCount)],
@@ -6349,7 +6349,7 @@ function getDeliveryStatusLinesForReport(row) {
     lines.push(`Sent: ${sentAt || "-"}`);
   }
   if (sentStatus.includes("deliver") || sentStatus.includes("read")) {
-    lines.push(`Delivered / Read: ${statusAt || "-"}`);
+    lines.push(`Delivered: ${statusAt || "-"}`);
   } else if (sentStatus.includes("fail")) {
     lines.push(`Failed: ${statusAt || "-"}`);
   } else if (!sentStatus && row.eventType !== "inbound") {
