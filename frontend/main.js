@@ -6086,6 +6086,108 @@ function webhookRowMatchesSentTransaction(row, requestKeys, mobileKeys) {
   return Boolean(mobile && mobileKeys.has(mobile));
 }
 
+function getWebhookReplyText(row = {}) {
+  const raw = parseJsonField(row.rawPayload, row.rawPayload || {});
+  return String(
+    row.customReply ||
+      row.text ||
+      row.inboundReply?.text ||
+      extractWebhookMessageText(raw || row) ||
+      "",
+  ).trim();
+}
+
+function getReportRowSortTime(row = {}) {
+  const time = new Date(
+    row.requestedAt ||
+      row.sentAt ||
+      row.receivedAt ||
+      row.statusUpdatedAt ||
+      row.updatedAt ||
+      0,
+  ).getTime();
+  return Number.isNaN(time) ? 0 : time;
+}
+
+function mergeInboundRepliesIntoSentRows(sentRows = [], webhookRows = []) {
+  const rows = sentRows.map((row) => ({ ...row }));
+  const sentByMobile = new Map();
+
+  rows.forEach((row, index) => {
+    const mobile = getReportRowMobileKey(row);
+    if (!mobile) return;
+    const group = sentByMobile.get(mobile) || [];
+    group.push({ row, index });
+    sentByMobile.set(mobile, group);
+  });
+
+  sentByMobile.forEach((group) =>
+    group.sort(
+      (a, b) =>
+        getReportRowSortTime(a.row) - getReportRowSortTime(b.row) ||
+        a.index - b.index,
+    ),
+  );
+
+  const replyEvents = webhookRows
+    .filter((row) => row.eventType === "inbound")
+    .map((row) => ({
+      row,
+      mobile: getReportRowMobileKey(row),
+      text: getWebhookReplyText(row),
+      receivedAt: row.receivedAt || row.statusUpdatedAt || row.updatedAt || "",
+    }))
+    .filter((reply) => reply.mobile && reply.text)
+    .sort(
+      (a, b) =>
+        getReportRowSortTime(a.row) - getReportRowSortTime(b.row),
+    );
+
+  const assignedByMobile = new Map();
+  replyEvents.forEach((reply) => {
+    const candidates = sentByMobile.get(reply.mobile) || [];
+    if (!candidates.length) return;
+
+    const assigned = assignedByMobile.get(reply.mobile) || 0;
+    const target = candidates[Math.min(assigned, candidates.length - 1)];
+    assignedByMobile.set(
+      reply.mobile,
+      Math.min(assigned + 1, candidates.length),
+    );
+
+    const existingHistory = Array.isArray(target.row.replyHistory)
+      ? target.row.replyHistory
+      : [];
+    const mergedHistory = normalizeReplyHistoryItems(
+      [
+        ...existingHistory,
+        {
+          text: reply.text,
+          receivedAt: reply.receivedAt,
+          requestId: reply.row.requestId,
+          payload: reply.row.rawPayload,
+        },
+      ],
+      target.row.customReply,
+      target.row.lastReplyAt,
+      target.row.replyWebhook || null,
+    );
+    target.row.replyHistory = mergedHistory;
+    target.row.customReply =
+      target.row.customReply || getReplyTextFromHistory(mergedHistory);
+    target.row.lastReplyAt =
+      target.row.lastReplyAt ||
+      mergedHistory
+        .map((item) => item.receivedAt || item.updatedAt || "")
+        .filter(Boolean)
+        .sort()
+        .pop() ||
+      "";
+  });
+
+  return rows;
+}
+
 async function getCustomReportRows(filters = {}) {
   let rows;
   if (filters.uploadId) {
@@ -6093,12 +6195,16 @@ async function getCustomReportRows(filters = {}) {
   } else {
     const sentRows = await listSenderReportRowsForCustomReport(filters);
     const uploadedRows = await listUploadedDocumentRowsForCustomReport(filters);
-    const requestKeys = new Set(sentRows.flatMap(getReportRowRequestKeys));
-    const mobileKeys = new Set(sentRows.map(getReportRowMobileKey).filter(Boolean));
-    const webhookOnlyRows = (await listCustomReportRowsFromMongo(filters)).filter(
+    const webhookRows = await listCustomReportRowsFromMongo(filters);
+    const mergedSentRows = mergeInboundRepliesIntoSentRows(sentRows, webhookRows);
+    const requestKeys = new Set(mergedSentRows.flatMap(getReportRowRequestKeys));
+    const mobileKeys = new Set(
+      mergedSentRows.map(getReportRowMobileKey).filter(Boolean),
+    );
+    const webhookOnlyRows = webhookRows.filter(
       (row) => !webhookRowMatchesSentTransaction(row, requestKeys, mobileKeys),
     );
-    rows = [...sentRows, ...uploadedRows, ...webhookOnlyRows];
+    rows = [...mergedSentRows, ...uploadedRows, ...webhookOnlyRows];
   }
   const seen = new Set();
   return rows.filter((row) => {

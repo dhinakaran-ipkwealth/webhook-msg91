@@ -1941,6 +1941,12 @@ function formatReplyHistory(row) {
     .join("\n");
 }
 
+function countReplyMessages(row) {
+  const entries = formatReplyHistoryEntries(row);
+  if (entries.length) return entries.length;
+  return row.eventType === "inbound" || row.customReply || row.lastReplyAt ? 1 : 0;
+}
+
 // Returns an icon for known WhatsApp button replies: a green check for
 // "Execute the Trade" and a red cross for "Deny". Any other reply text is
 // shown as-is with no icon.
@@ -2278,8 +2284,9 @@ function renderCustomSummary(rows) {
   const uniqueCustomers = new Set(
     outboundRows.map(getCustomerKey).filter(Boolean),
   );
-  const repliedRows = rows.filter(
-    (row) => row.eventType === "inbound" || row.customReply || row.lastReplyAt,
+  const replyEvents = rows.reduce(
+    (total, row) => total + countReplyMessages(row),
+    0,
   );
 
   const getStatusKey = (row) =>
@@ -2313,7 +2320,7 @@ function renderCustomSummary(rows) {
   const counts = {
     total: outboundRows.length,
     uniqueCustomers: uniqueCustomers.size,
-    replyEvents: repliedRows.length,
+    replyEvents,
     delivered,
     pending,
     failed,
@@ -2339,7 +2346,7 @@ function renderCustomSummary(rows) {
     {
       label: "Customer Replies",
       value: counts.replyEvents,
-      note: "Subset of sent records with inbound customer reply evidence.",
+      note: "Inbound customer reply messages captured from MSG91.",
       tone: "reply",
     },
     {
