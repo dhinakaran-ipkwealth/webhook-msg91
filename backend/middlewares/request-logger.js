@@ -22,7 +22,7 @@
  *   requestsPerMinute  rolling count for the last complete minute
  *
  * Metrics are exported as `metrics` and exposed via the /metrics endpoint
- * wired in webhook-server.js.
+ * wired in app.js.
  */
 
 "use strict";

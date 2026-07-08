@@ -2,7 +2,13 @@
 
 This is the 24/7 Express receiver that MSG91 calls with delivery reports and
 inbound WhatsApp replies. It runs under PM2 on an Ubuntu EC2 instance, behind
-Nginx, on `https://crm.ipkwealth.com`.
+Nginx, on `https://crm.ipkwealth.com`. See [`README.md`](./README.md) for the
+architecture, folder structure, routing, and `sender_numbers` onboarding —
+this file covers only the EC2/PM2/Nginx mechanics.
+
+**Test locally first:** run `npm run dev:local` (see README.md's "Running
+locally before deploying to EC2") to exercise the server against the real
+MongoDB on `http://127.0.0.1:3099` before pushing any change below.
 
 PM2 process name: **`webhook-msg91-backend`** (see `ecosystem.config.js`).
 Expected deploy path: **`/home/ubuntu/webhook-msg91/backend`** (must match
@@ -170,13 +176,23 @@ npm run pm2:delete    # remove entirely from PM2 (use before re-adding with a ch
 ## 8. Deploying a code update
 
 ```bash
-# from your machine
-scp -i <key.pem> webhook-server.js middleware/*.js lib/*.js \
-  <user>@<host>:/home/ubuntu/webhook-msg91/backend/  # match subfolders as needed
+# from your machine — sync the whole backend/ tree (app.js, config/, models/,
+# services/, middlewares/, controllers/, routes/, utils/, lib/, webhook-server.js)
+rsync -avz --exclude node_modules --exclude .env --exclude logs \
+  -e "ssh -i <key.pem>" ./ <user>@<host>:/home/ubuntu/webhook-msg91/backend/
 
 # on the box
 cd /home/ubuntu/webhook-msg91/backend
-npm run pm2:restart   # build step catches syntax errors before PM2 (re)starts
+npm run pm2:restart   # build step (scripts/build.js) catches syntax errors before PM2 (re)starts
+```
+
+### Onboarding a new WhatsApp sender number
+
+No code change or deploy is needed — insert a document into `sender_numbers`
+(see README.md). To seed the initial known numbers on a fresh environment:
+
+```bash
+npm run seed:senders
 ```
 
 If `package.json`/`package-lock.json` changed, run `npm ci --omit=dev` before

@@ -35,77 +35,14 @@ try {
 }
 
 const { metrics } = require("./request-logger");
+const env = require("../config/env");
+const redisService = require("../services/redis.service");
 
-// ── env config ────────────────────────────────────────────────────────────────
-const RATE_LIMIT_ENABLED =
-  String(process.env.RATE_LIMIT_ENABLED ?? "true").toLowerCase() !== "false";
-const REDIS_HOST = process.env.REDIS_HOST || "127.0.0.1";
-const REDIS_PORT = Number(process.env.REDIS_PORT || 6379);
-const REDIS_PASSWORD = process.env.REDIS_PASSWORD || undefined;
-const REDIS_DB = Number(process.env.REDIS_DB || 0);
-
-const AUTH_RATE_LIMIT = Number(process.env.AUTH_RATE_LIMIT || 10);
-const API_RATE_LIMIT = Number(process.env.API_RATE_LIMIT || 100);
-const GRAPHQL_RATE_LIMIT = Number(process.env.GRAPHQL_RATE_LIMIT || 500);
-const WEBHOOK_RATE_LIMIT = Number(process.env.WEBHOOK_RATE_LIMIT || 5000);
-
-// ── Redis store (optional) ────────────────────────────────────────────────────
-let redisClient = null;
-let redisReady = false;
-
-function tryConnectRedis() {
-  if (!REDIS_HOST) return;
-  let Redis, RedisStore;
-  try {
-    Redis = require("ioredis");
-    RedisStore = require("rate-limit-redis").RedisStore;
-  } catch {
-    console.warn(
-      "[rate-limit] ioredis / rate-limit-redis not installed — using in-memory store. " +
-        "Run: npm install ioredis rate-limit-redis"
-    );
-    return;
-  }
-
-  const client = new Redis({
-    host: REDIS_HOST,
-    port: REDIS_PORT,
-    password: REDIS_PASSWORD,
-    db: REDIS_DB,
-    lazyConnect: true,
-    enableOfflineQueue: false,
-    connectTimeout: 3000,
-    maxRetriesPerRequest: 1,
-  });
-
-  client.on("ready", () => {
-    redisReady = true;
-    redisClient = client;
-    console.log(`[rate-limit] Redis connected at ${REDIS_HOST}:${REDIS_PORT}`);
-  });
-  client.on("error", (err) => {
-    if (redisReady) {
-      // Only warn if we were previously connected — avoids log spam on startup
-      console.warn("[rate-limit] Redis error, falling back to memory:", err.message);
-    }
-    redisReady = false;
-  });
-  client.on("close", () => {
-    redisReady = false;
-  });
-
-  client.connect().catch(() => {
-    console.warn("[rate-limit] Redis not reachable — using in-memory store");
-  });
-}
-
-// Attempt connection at module load; non-fatal if it fails.
-tryConnectRedis();
-
-// Expose client so dedup module can reuse the same connection.
-function getRedisClient() {
-  return redisReady ? redisClient : null;
-}
+const RATE_LIMIT_ENABLED = env.RATE_LIMIT_ENABLED;
+const AUTH_RATE_LIMIT = env.AUTH_RATE_LIMIT;
+const API_RATE_LIMIT = env.API_RATE_LIMIT;
+const GRAPHQL_RATE_LIMIT = env.GRAPHQL_RATE_LIMIT;
+const WEBHOOK_RATE_LIMIT = env.WEBHOOK_RATE_LIMIT;
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -136,8 +73,7 @@ function shouldSkip(req) {
   if (req.path === "/health" || req.path === "/healthz") return true;
 
   // Internal cron jobs identified by a shared secret header
-  const cronSecret = process.env.INTERNAL_CRON_SECRET;
-  if (cronSecret && req.headers["x-internal-cron"] === cronSecret) return true;
+  if (env.INTERNAL_CRON_SECRET && req.headers["x-internal-cron"] === env.INTERNAL_CRON_SECRET) return true;
 
   // Admin requests from localhost.
   // getClientIp already strips ::ffff: so ::ffff:127.0.0.1 → 127.0.0.1.
@@ -155,7 +91,8 @@ function shouldSkip(req) {
  * MemoryStore (safe for single-process, NOT safe across PM2 workers).
  */
 function buildStore(prefix) {
-  if (!redisReady || !redisClient) {
+  const redisClient = redisService.getClient();
+  if (!redisClient) {
     // MemoryStore is the express-rate-limit default — no import needed.
     return undefined; // undefined → express-rate-limit uses MemoryStore
   }
@@ -221,8 +158,8 @@ function buildLimiter(opts) {
  * Webhook limiter — used on all /webhook* routes.
  *
  * CRITICAL: handler returns HTTP 200 (not 429).
- * MSG91 pauses webhook delivery on any non-2xx response and retries later,
- * which would amplify load rather than reduce it.
+ * MSG91 pauses webhook delivery to any endpoint that returns non-2xx and will
+ * retry later, which would amplify load rather than reduce it.
  */
 const webhookLimiter = RATE_LIMIT_ENABLED
   ? buildLimiter({
@@ -276,8 +213,8 @@ const graphqlLimiter = RATE_LIMIT_ENABLED
 function rateLimitStatus() {
   return {
     enabled: RATE_LIMIT_ENABLED,
-    redisConnected: redisReady,
-    store: redisReady ? "redis" : "memory",
+    redisConnected: redisService.isReady(),
+    store: redisService.isReady() ? "redis" : "memory",
     limits: {
       webhook: WEBHOOK_RATE_LIMIT,
       api: API_RATE_LIMIT,
@@ -294,6 +231,5 @@ module.exports = {
   authLimiter,
   graphqlLimiter,
   getClientIp,
-  getRedisClient,
   rateLimitStatus,
 };

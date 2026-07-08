@@ -58,6 +58,11 @@ module.exports = {
         REDIS_HOST: process.env.REDIS_HOST,
         REDIS_PORT: process.env.REDIS_PORT,
 
+        // Security — opt-in only. Leave unset to keep both checks disabled;
+        // see README.md "Security" for details before enabling in production.
+        MSG91_WEBHOOK_SECRET: process.env.MSG91_WEBHOOK_SECRET,
+        MSG91_IP_WHITELIST: process.env.MSG91_IP_WHITELIST,
+
         // Optional
         LOG_LEVEL: "info",
       },

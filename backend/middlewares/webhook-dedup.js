@@ -31,11 +31,12 @@
 "use strict";
 
 const crypto = require("crypto");
-const { getRedisClient } = require("./rate-limit");
+const redisService = require("../services/redis.service");
 const { metrics } = require("./request-logger");
+const env = require("../config/env");
 
 // TTL for dedup records (default 24 h)
-const DEDUP_TTL_HOURS = Number(process.env.DEDUP_TTL_HOURS || 24);
+const DEDUP_TTL_HOURS = env.DEDUP_TTL_HOURS;
 const DEDUP_TTL_SECONDS = DEDUP_TTL_HOURS * 3600;
 const DEDUP_TTL_MS = DEDUP_TTL_SECONDS * 1000;
 
@@ -127,7 +128,7 @@ function extractEventIds(body) {
 // ── Redis dedup ───────────────────────────────────────────────────────────────
 
 async function checkDuplicateRedis(eventId) {
-  const client = getRedisClient();
+  const client = redisService.getClient();
   if (!client) return null; // Redis not available
 
   const key = `${REDIS_KEY_PREFIX}${eventId}`;
@@ -138,7 +139,7 @@ async function checkDuplicateRedis(eventId) {
 }
 
 async function markSeenRedis(eventId) {
-  const client = getRedisClient();
+  const client = redisService.getClient();
   if (!client) return false;
   const key = `${REDIS_KEY_PREFIX}${eventId}`;
   await client.set(key, "1", "EX", DEDUP_TTL_SECONDS);

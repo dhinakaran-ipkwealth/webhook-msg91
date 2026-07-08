@@ -88,13 +88,18 @@ try {
 }
 
 let mainWindow;
+const isProductionRuntime = process.env.NODE_ENV === "production";
+const defaultWebhookPort = isProductionRuntime ? 3002 : 3099;
 let webhookPort = Number(
   process.env.ELECTRON_WEBHOOK_PORT ||
-    process.env.WEBHOOK_PORT ||
-    (app.isPackaged ? 3002 : 0),
+    (isProductionRuntime
+      ? process.env.PORT || defaultWebhookPort
+      : process.env.WEBHOOK_PORT || process.env.PORT || defaultWebhookPort),
 );
 const reportRefreshIntervalMs = 2000;
-const defaultWebhookBaseUrl = "https://crm.ipkwealth.com";
+const defaultWebhookBaseUrl = isProductionRuntime
+  ? "https://crm.ipkwealth.com"
+  : `http://localhost:${defaultWebhookPort}`;
 const EMAIL_NOTIFICATIONS_ENABLED = false;
 let db;
 let msg91ConfigCache = null;
@@ -1094,6 +1099,34 @@ function getMongoConfig() {
   };
 }
 
+function getMongoClientOptions(uri) {
+  const options = {
+    serverSelectionTimeoutMS: 30000,
+    connectTimeoutMS: 30000,
+    socketTimeoutMS: 45000,
+    maxPoolSize: 10,
+    minPoolSize: 0,
+  };
+
+  let parsedUri = null;
+  try {
+    parsedUri = new URL(uri);
+  } catch (_) {
+    return options;
+  }
+
+  const tlsValue =
+    parsedUri.searchParams.get("tls") || parsedUri.searchParams.get("ssl");
+  if (tlsValue && tlsValue.toLowerCase() !== "false") {
+    options.tls = true;
+  } else if (parsedUri.protocol === "mongodb+srv:") {
+    options.tls = true;
+  }
+
+  return options;
+}
+
+
 // ── per-template collection helpers ──────────────────────────────────────────
 // Sender reports stay in the main DB as whatsapp_sender_reports_<template>.
 // Raw webhook logs stay in msg91_webhooks as <template>, or
@@ -1361,15 +1394,7 @@ async function initMongo() {
       uri.startsWith("mongodb+srv://") ? "SRV" : "STANDARD",
     );
 
-    mongoClient = new MongoClient(uri, {
-      tls: true,
-      retryWrites: true,
-      serverSelectionTimeoutMS: 30000,
-      connectTimeoutMS: 30000,
-      socketTimeoutMS: 45000,
-      maxPoolSize: 10,
-      minPoolSize: 0,
-    });
+    mongoClient = new MongoClient(uri, getMongoClientOptions(uri));
 
     await mongoClient.connect();
 
@@ -1527,11 +1552,17 @@ async function requireMongoDb() {
 
 function getWebhookBaseUrl() {
   const envValues = getRuntimeEnvValues();
-  return (
+  const configuredUrl = (
     envValues.WEBHOOK_PUBLIC_BASE_URL ||
     process.env.WEBHOOK_PUBLIC_BASE_URL ||
     defaultWebhookBaseUrl
   ).replace(/\/+$/, "");
+
+  if (isProductionRuntime && isLocalWebhookUrl(configuredUrl)) {
+    return "https://crm.ipkwealth.com";
+  }
+
+  return configuredUrl;
 }
 
 function isLocalWebhookUrl(url) {
