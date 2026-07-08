@@ -1,9 +1,9 @@
 {
   "name": "webhook-msg91",
   "version": "0.1.3",
-  "description": "MSG91 Webhook Desktop App",
+  "description": "IPKWealth Desktop App",
   "main": "main.js",
-  "author": "Dhinakaran K",
+  "author": "IPKWealth Services",
   "private": true,
   "scripts": {
     "start": "electron .",
@@ -39,8 +39,8 @@
       "output": "dist"
     },
     "files": [
-      "main_mongodb_no_report_sync.js",
-      "index_modern_saas_complete.html",
+      "main.js",
+      "index.html",
       "renderer.js",
       "preload.js",
       "validate.js",
