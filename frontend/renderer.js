@@ -488,8 +488,11 @@ customReportRefresh.addEventListener("click", async () => {
   try {
     customReportRefresh.disabled = true;
     customReportRefresh.textContent = "Refreshing...";
-    await refreshCustomReport();
-    showAlert("Webhook report refreshed.", "success");
+    const result = await refreshCustomReport({ backfillMsg91Logs: true });
+    showAlert(
+      result?.backfill?.message || "Webhook report refreshed.",
+      result?.backfill?.error ? "warning" : "success",
+    );
   } catch (err) {
     showAlert(`Refresh report failed: ${err.message}`, "error");
   } finally {
@@ -2379,19 +2382,19 @@ function setCustomReportLoading(isLoading) {
   if (customReportLoading) customReportLoading.hidden = !isLoading;
 }
 
-async function refreshCustomReport() {
+async function refreshCustomReport(options = {}) {
   if (customReportRefreshInProgress) return;
   customReportRefreshInProgress = true;
   setCustomReportLoading(true);
   try {
-    await _doRefreshCustomReport();
+    return await _doRefreshCustomReport(options);
   } finally {
     customReportRefreshInProgress = false;
     setCustomReportLoading(false);
   }
 }
 
-async function _doRefreshCustomReport() {
+async function _doRefreshCustomReport(options = {}) {
   if (customScope.value === "selected" && !selectedUploadId) {
     lastCustomReportRows = [];
     customReportSummary.textContent =
@@ -2401,9 +2404,14 @@ async function _doRefreshCustomReport() {
     return;
   }
 
-  const rows = await window.electronAPI.fetchCustomReport(
-    getCustomReportFilters(),
-  );
+  const filters = getCustomReportFilters();
+  const refreshResult =
+    options.backfillMsg91Logs && customScope.value !== "selected"
+      ? await window.electronAPI.refreshCustomReport(filters)
+      : null;
+  const rows =
+    refreshResult?.rows ||
+    (await window.electronAPI.fetchCustomReport(filters));
   lastCustomReportRows = rows;
   const scopeText =
     customScope.value === "selected"
@@ -2561,6 +2569,7 @@ async function _doRefreshCustomReport() {
     }
   });
 
+  return refreshResult || { rows };
 }
 
 // Help button for Custom Report header

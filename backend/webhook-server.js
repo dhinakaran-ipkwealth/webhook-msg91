@@ -230,6 +230,19 @@ function inferEventType(item, context = {}) {
   const messageType = String(
     item.messageType || item.message_type || "",
   ).toLowerCase();
+  const content = parseMaybeJson(item.content);
+  const hasInboundContent =
+    Boolean(item.content) &&
+    (!content ||
+      typeof content !== "object" ||
+      Boolean(
+        content.text ||
+          content.button ||
+          content.interactive ||
+          content.reaction ||
+          content.caption ||
+          content.url,
+      ));
 
   if (
     item.replyMsgId ||
@@ -242,6 +255,7 @@ function inferEventType(item, context = {}) {
     item.reaction ||
     item.contacts ||
     item.messages ||
+    hasInboundContent ||
     item.caption ||
     item.url ||
     item.clickedUrl ||
@@ -405,8 +419,15 @@ function extractContentText(content) {
     parsed.button?.text ||
     parsed.button?.payload ||
     parsed.interactive?.button_reply?.title ||
+    parsed.interactive?.button_reply?.id ||
     parsed.interactive?.list_reply?.title ||
+    parsed.interactive?.list_reply?.id ||
+    parsed.interactive?.nfm_reply?.body ||
+    parsed.interactive?.flow_reply?.body ||
+    parsed.reaction?.emoji ||
+    parsed.reaction ||
     parsed.caption ||
+    parsed.url ||
     ""
   );
 }

@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   refreshUploadReport: (uploadId) => ipcRenderer.invoke("refresh-upload-report", uploadId),
   exportUploadReport: (uploadId) => ipcRenderer.invoke("export-upload-report", uploadId),
   fetchCustomReport: (filters) => ipcRenderer.invoke("fetch-custom-report", filters),
+  refreshCustomReport: (filters) => ipcRenderer.invoke("refresh-custom-report", filters),
   fetchSenderStats: (filters) => ipcRenderer.invoke("fetch-sender-stats", filters),
   exportCustomReport: (filters) => ipcRenderer.invoke("export-custom-report", filters),
   scheduleSet: (cfg) => ipcRenderer.invoke("schedule-set", cfg),

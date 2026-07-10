@@ -2408,6 +2408,21 @@ async function upsertWebhookEventDoc(doc) {
     doc.eventType || "",
     doc.normalizedStatus || "",
     String(doc.matchedUploadId ?? ""),
+    doc.requestId || doc.uuid || doc.replyMsgId
+      ? ""
+      : doc.statusUpdatedAt ||
+        doc.requestedAt ||
+        doc.sentAt ||
+        doc.receivedAt ||
+        doc.rawPayload?.statusUpdatedAt ||
+        doc.rawPayload?.requestedAt ||
+        doc.rawPayload?.sentAt ||
+        doc.rawPayload?.timestamp ||
+        doc.rawPayload?.ts ||
+        doc.rawPayload?.["Delivered At"] ||
+        doc.rawPayload?.["Read At"] ||
+        doc.rawPayload?.["Sent At"] ||
+        "",
     doc.text || "",
   ];
   const eventKey = keyParts.join("|");
@@ -3589,8 +3604,10 @@ function normalizeWebhookItem(item) {
       item.customer_number ||
       item.customerMobile ||
       item.customer_mobile ||
+      item.from ||
       item.recipient ||
       item.wa_id ||
+      extractMobileFromWebhookMessages(item.messages) ||
       null,
     status:
       item.status ||
@@ -3656,6 +3673,10 @@ function normalizeWebhookItem(item) {
       item.updated_at ||
       item["Delivered Time"] ||
       item["Sent Time"] ||
+      item.timestamp ||
+      item.ts ||
+      item.createdAt ||
+      item.created_at ||
       null,
     raw: item,
   };
@@ -3825,6 +3846,19 @@ function inferMsg91EventType(item) {
   const messageType = String(
     item.messageType || item.message_type || "",
   ).toLowerCase();
+  const content = parseMaybeJson(item.content);
+  const hasInboundContent =
+    Boolean(item.content) &&
+    (!content ||
+      typeof content !== "object" ||
+      Boolean(
+        content.text ||
+          content.button ||
+          content.interactive ||
+          content.reaction ||
+          content.caption ||
+          content.url,
+      ));
 
   if (
     item.replyMsgId ||
@@ -3836,6 +3870,8 @@ function inferMsg91EventType(item) {
     item.interactive ||
     item.reaction ||
     item.contacts ||
+    item.messages ||
+    hasInboundContent ||
     contentType ||
     [
       "text",
@@ -3846,6 +3882,10 @@ function inferMsg91EventType(item) {
       "document",
       "audio",
       "video",
+      "url",
+      "url_click",
+      "flow",
+      "nfm_reply",
     ].includes(messageType)
   ) {
     return "inbound";
@@ -3863,6 +3903,9 @@ function normalizeMsg91WebhookItem(item) {
       item.to ||
       item.number ||
       item.phone ||
+      item.from ||
+      item.wa_id ||
+      extractMobileFromWebhookMessages(item.messages) ||
       item.recipient ||
       "",
   );
@@ -3929,7 +3972,11 @@ function extractMessagesText(messages) {
         message.button?.text ||
         message.button?.payload ||
         message.interactive?.button_reply?.title ||
+        message.interactive?.button_reply?.id ||
         message.interactive?.list_reply?.title ||
+        message.interactive?.list_reply?.id ||
+        message.interactive?.nfm_reply?.body ||
+        message.interactive?.flow_reply?.body ||
         message.image?.caption ||
         message.video?.caption ||
         message.document?.caption ||
@@ -4001,17 +4048,31 @@ function getMsg91CorrelationId(item, eventType) {
   );
 }
 
+function extractReactionText(reaction) {
+  const parsed = parseMaybeJson(reaction);
+  if (!parsed) return "";
+  if (typeof parsed === "string") return parsed;
+  return parsed.emoji || parsed.text || parsed.reaction || JSON.stringify(parsed);
+}
+
 function extractWebhookMessageText(item) {
   const content = parseMaybeJson(item.content);
   if (content && typeof content === "object") {
     const contentText =
-      content.text ||
       content.text?.body ||
+      content.text ||
       content.button?.text ||
       content.button?.payload ||
       content.interactive?.button_reply?.title ||
+      content.interactive?.button_reply?.id ||
       content.interactive?.list_reply?.title ||
+      content.interactive?.list_reply?.id ||
+      content.interactive?.nfm_reply?.body ||
+      content.interactive?.flow_reply?.body ||
+      content.reaction?.emoji ||
+      content.reaction ||
       content.caption ||
+      content.url ||
       "";
     if (contentText) return String(contentText);
   }
@@ -4022,7 +4083,7 @@ function extractWebhookMessageText(item) {
       extractInteractiveText(item.interactive) ||
       extractMessagesText(item.messages) ||
       item.caption ||
-      item.reaction ||
+      extractReactionText(item.reaction) ||
       item.url ||
       "",
   );
@@ -4201,6 +4262,7 @@ function enrichWebhookItem(item, context = {}) {
 
 async function processWebhookReport(body, context = {}) {
   const payload = getPayloadItems(body);
+  const result = { total: payload.length, inserted: 0, updated: 0, skipped: 0 };
 
   for (const rawItem of payload) {
     const item = enrichWebhookItem(rawItem, context);
@@ -4216,10 +4278,17 @@ async function processWebhookReport(body, context = {}) {
       finalMatch,
       context,
     );
-    if (!storedEvent.changes) continue;
+    if (storedEvent.changes) {
+      result.inserted += 1;
+    } else {
+      result.updated += 1;
+      continue;
+    }
 
     await updateNumberFromWebhook(item, msg91Normalized, finalMatch);
   }
+
+  return result;
 }
 
 function getRemoteEventPayload(event) {
@@ -4404,6 +4473,88 @@ function extractReportItemsFromBody(body) {
     if (Array.isArray(candidate)) return candidate;
   }
   return [parsed];
+}
+
+function normalizeMsg91LogItem(item = {}) {
+  if (!item || typeof item !== "object") return item;
+  const content = item.content ?? item.Content ?? item.message ?? item.Message;
+  const eventName =
+    item.eventName ||
+    item.event_name ||
+    item["Delivery Report"] ||
+    item.delivery_report ||
+    item.status ||
+    item.Status ||
+    "";
+  const normalized = {
+    ...item,
+    content,
+    crqid: item.crqid || item.CRQID || item.crqId || item.crq_id || null,
+    uuid: item.uuid || item.UUID || item.message_uuid || null,
+    requestId:
+      item.requestId ||
+      item.request_id ||
+      item["Request ID"] ||
+      item["Message ID"] ||
+      item.messageId ||
+      item.message_id ||
+      null,
+    customerNumber:
+      item.customerNumber ||
+      item.customer_number ||
+      item["Customer Number"] ||
+      item.mobile ||
+      item.to ||
+      item.recipient ||
+      null,
+    integratedNumber:
+      item.integratedNumber ||
+      item.integrated_number ||
+      item["Integrated Number"] ||
+      item["Whatsapp Number"] ||
+      item.senderNumber ||
+      item.sender_number ||
+      item.from ||
+      null,
+    templateName:
+      item.templateName ||
+      item.template_name ||
+      item["Template Name"] ||
+      item.Template ||
+      item.template ||
+      item.campaignName ||
+      item.campaign_name ||
+      null,
+    statusUpdatedAt:
+      item.statusUpdatedAt ||
+      item.status_updated_at ||
+      item["Read At"] ||
+      item["Delivered At"] ||
+      item["Sent At"] ||
+      item.readAt ||
+      item.deliveredAt ||
+      item.sentAt ||
+      item.timestamp ||
+      item.ts ||
+      null,
+    requestedAt:
+      item.requestedAt ||
+      item.requested_at ||
+      item["Requested At"] ||
+      item["Sent At"] ||
+      item.sentAt ||
+      null,
+    paymentStatus:
+      item.paymentStatus || item.payment_status || item["Payment Status"] || null,
+    eventName,
+    webhookType: item.webhookType || item.webhook_type || "msg91_logs",
+  };
+
+  if (!normalized.eventType && content && (!eventName || eventName === "-")) {
+    normalized.webhookType = "inbound";
+  }
+
+  return normalized;
 }
 
 function reportItemMatchesUploadContext(normalized, upload) {
@@ -4627,6 +4778,63 @@ async function requestLogsReportForUpload(upload) {
     ...result,
     source: "logs",
     message: `MSG91 logs refreshed. Updated ${result.updated} row(s), skipped ${result.skipped}.`,
+  };
+}
+
+async function importMsg91LogsForCustomReport(filters = {}) {
+  if (filters.uploadId || filters.skipMsg91Backfill) {
+    return { imported: 0, updated: 0, skipped: 0, message: "" };
+  }
+
+  const config = await getRuntimeMsg91Config();
+  if (!config.authKey) {
+    return {
+      imported: 0,
+      updated: 0,
+      skipped: 0,
+      message: "MSG91 auth key is not configured; showing local Mongo data only.",
+    };
+  }
+
+  const startDate = toMsg91Date(filters.startDateTime || new Date());
+  const endDate = toMsg91Date(filters.endDateTime || new Date());
+  const response = await axios.get(
+    "https://control.msg91.com/api/v5/report/logs/wa",
+    {
+      headers: {
+        accept: "application/json",
+        authkey: config.authKey,
+      },
+      params: { startDate, endDate },
+      timeout: 30000,
+    },
+  );
+
+  let items = extractReportItemsFromBody(response.data).map(normalizeMsg91LogItem);
+
+  if (filters.filteredNumberId && filters.filteredNumberId !== "all") {
+    const selectedSender = normalizeSenderFilterValue(filters.filteredNumberId);
+    items = items.filter((item) => {
+      const itemSender = normalizeSenderFilterValue(
+        item.integratedNumber || item.integrated_number || item.senderNumber || "",
+      );
+      return !selectedSender || !itemSender || selectedSender === itemSender;
+    });
+  }
+
+  const result = await processWebhookReport(items, {
+    source: "msg91_logs_backfill",
+    webhookType: "msg91_logs",
+    receivedAt: new Date().toISOString(),
+  });
+  await syncMongoWebhookEvents();
+
+  return {
+    imported: result.inserted || 0,
+    updated: result.updated || 0,
+    skipped: result.skipped || 0,
+    total: items.length,
+    message: `MSG91 logs synced. Imported ${result.inserted || 0}, updated ${result.updated || 0}, skipped ${result.skipped || 0}.`,
   };
 }
 
@@ -5616,6 +5824,26 @@ ipcMain.handle("fetch-custom-report", async (event, filters = {}) => {
   // Read only. This is called every 10 seconds by the renderer.
   // Never call syncMongoWebhookEvents() here, otherwise the refresh can write duplicate rows.
   return getCustomReportRows(filters);
+});
+
+ipcMain.handle("refresh-custom-report", async (event, filters = {}) => {
+  let backfill;
+  try {
+    backfill = await importMsg91LogsForCustomReport(filters);
+  } catch (error) {
+    backfill = {
+      imported: 0,
+      updated: 0,
+      skipped: 0,
+      error: error.response?.data?.message || error.message || String(error),
+      message:
+        error.response?.data?.message ||
+        error.message ||
+        "MSG91 logs sync failed; showing local Mongo data only.",
+    };
+  }
+  const rows = await getCustomReportRows(filters);
+  return { rows, backfill };
 });
 
 ipcMain.handle("fetch-sender-stats", async (event, filters = {}) => {
