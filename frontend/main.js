@@ -93,7 +93,7 @@ let webhookPort = Number(
     process.env.WEBHOOK_PORT ||
     (app.isPackaged ? 3002 : 0),
 );
-const reportRefreshIntervalMs = 2000;
+const reportRefreshIntervalMs = 60000;
 const defaultWebhookBaseUrl = "https://crm.ipkwealth.com";
 const EMAIL_NOTIFICATIONS_ENABLED = false;
 let db;
@@ -1609,6 +1609,7 @@ async function getPublicMsg91Config() {
     integratedNumber: config.integratedNumber,
     webhookBaseUrl,
     webhookUrl: `${webhookBaseUrl}/webhook`,
+    callbackUrl: `${webhookBaseUrl}/webhook/msg91/callback`,
     webhookIsLocalOnly: isLocalWebhookUrl(webhookBaseUrl),
     reportPollingEnabled: getReportPollingEnabled(),
 
@@ -1768,10 +1769,10 @@ function createTray() {
     "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAMklEQVR4AWMYmWH8z0ABYBxVSFUBCzAqmkGNgYGBYVQ0gHqgGmDUBHKAaRV5AVgDAFTSDxHizHctAAAAAElFTkSuQmCC",
   );
   tray = new Tray(trayIcon);
-  tray.setToolTip("WhatsApp Bulk Sender server is running");
+  tray.setToolTip("IPKWealth Communications   server is running");
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: "Open WhatsApp Bulk Sender", click: showMainWindow },
+      { label: "Open IPKWealth Communications  ", click: showMainWindow },
       {
         label: `Webhook: http://127.0.0.1:${webhookPort}/webhook`,
         enabled: false,
@@ -3537,6 +3538,11 @@ async function mirrorSenderReport(update) {
           customReply: update.customReply,
           replyHistory: update.replyHistory,
           lastReplyAt: update.lastReplyAt,
+          reason: update.reason,
+          failureCode: update.failureCode,
+          failureCategory: update.failureCategory,
+          retryAfter: update.retryAfter,
+          retryBlockedReason: update.retryBlockedReason,
           webhook: update.webhook,
           report: update.report,
           csvRowData: update.csvRowData,
@@ -3672,6 +3678,88 @@ function createStatusLabel(statusText) {
   if (normalized.includes("sent") || normalized.includes("submit"))
     return "sent";
   return "reporting";
+}
+
+function getMsg91FailureCode(item = {}) {
+  const direct =
+    item.statusCode ||
+    item.status_code ||
+    item.errorCode ||
+    item.error_code ||
+    item.code ||
+    item.error?.code ||
+    item.errors?.[0]?.code ||
+    "";
+  const text = [
+    direct,
+    item.reason,
+    item.error?.message,
+    item.errors?.[0]?.message,
+    item.cleverTapErrorReason,
+    item.webEngangeErrorCode,
+    item.moEngageErrorCode,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const match = String(text).match(/\b(131049)\b/);
+  return match ? match[1] : direct ? String(direct) : "";
+}
+
+function getMsg91FailureReason(item = {}) {
+  return (
+    item.reason ||
+    item.error?.message ||
+    item.errors?.[0]?.message ||
+    item.cleverTapErrorReason ||
+    item.status ||
+    item.eventName ||
+    ""
+  );
+}
+
+function getMessageFailurePolicy(item = {}, status = "") {
+  const code = getMsg91FailureCode(item);
+  const reason = getMsg91FailureReason(item);
+  const haystack = `${code} ${reason}`.toLowerCase();
+  if (
+    code === "131049" ||
+    haystack.includes("healthy ecosystem engagement") ||
+    haystack.includes("healthy ecosystem")
+  ) {
+    const retryAfter = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    return {
+      failureCode: "131049",
+      failureCategory: "healthy_ecosystem",
+      retryAfter,
+      retryBlockedReason:
+        "WhatsApp limited this recipient for healthy ecosystem engagement. Retry after 24 hours or after the customer engages.",
+      reason: reason || "This message was not delivered to maintain healthy ecosystem engagement.",
+    };
+  }
+
+  if (status === "failed" || reason || code) {
+    return {
+      failureCode: code,
+      failureCategory: code ? "provider_error" : "",
+      retryAfter: "",
+      retryBlockedReason: "",
+      reason,
+    };
+  }
+
+  return {
+    failureCode: "",
+    failureCategory: "",
+    retryAfter: "",
+    retryBlockedReason: "",
+    reason: "",
+  };
+}
+
+function isRetryAllowed(row = {}, now = new Date()) {
+  if (!row.retryAfter) return true;
+  const retryAt = new Date(row.retryAfter);
+  return Number.isNaN(retryAt.getTime()) || retryAt <= now;
 }
 
 function parseMaybeJson(value) {
@@ -4045,12 +4133,21 @@ async function updateNumberFromWebhook(item, normalized, match) {
 
   const lastUpdated =
     item.statusUpdatedAt || item.requestedAt || new Date().toISOString();
+  const failurePolicy = getMessageFailurePolicy(
+    item,
+    normalized.normalizedStatus,
+  );
   await updateNumberFields(match.numberId, {
     deliveryStatus: normalized.normalizedStatus,
     currentStatus: normalized.normalizedStatus,
     responseId,
     messageId: responseId,
     responseDetails: stringifyResponseDetails(item),
+    reason: failurePolicy.reason,
+    failureCode: failurePolicy.failureCode,
+    failureCategory: failurePolicy.failureCategory,
+    retryAfter: failurePolicy.retryAfter,
+    retryBlockedReason: failurePolicy.retryBlockedReason,
     lastUpdated,
   });
 
@@ -4071,11 +4168,19 @@ async function updateNumberFromWebhook(item, normalized, match) {
       responseId,
       messageId: responseId,
       responseDetails: item,
+      reason: failurePolicy.reason,
+      failureCode: failurePolicy.failureCode,
+      failureCategory: failurePolicy.failureCategory,
+      retryAfter: failurePolicy.retryAfter,
+      retryBlockedReason: failurePolicy.retryBlockedReason,
       csvRowData: parseRowData(row),
       webhook: item,
       report: {
         status: normalized.normalizedStatus,
-        reason: item.reason || item.cleverTapErrorReason || null,
+        reason: failurePolicy.reason || item.reason || item.cleverTapErrorReason || null,
+        failureCode: failurePolicy.failureCode || null,
+        failureCategory: failurePolicy.failureCategory || null,
+        retryAfter: failurePolicy.retryAfter || null,
         price: item.price || null,
       },
     });
@@ -4461,6 +4566,7 @@ async function applyReportItemsToUpload(
     }
 
     const deliveryStatus = createStatusLabel(normalized.status || item.status);
+    const failurePolicy = getMessageFailurePolicy(item, deliveryStatus);
     const currentStatus =
       deliveryStatus === "delivered"
         ? "delivered"
@@ -4475,6 +4581,11 @@ async function applyReportItemsToUpload(
       responseId: responseId || candidates[0].responseId || null,
       messageId: responseId || candidates[0].messageId || null,
       responseDetails: stringifyResponseDetails({ source: sourceLabel, item }),
+      reason: failurePolicy.reason,
+      failureCode: failurePolicy.failureCode,
+      failureCategory: failurePolicy.failureCategory,
+      retryAfter: failurePolicy.retryAfter,
+      retryBlockedReason: failurePolicy.retryBlockedReason,
       lastUpdated: normalized.statusUpdatedAt || new Date().toISOString(),
     });
     await mirrorNumberById(candidates[0].id);
@@ -5082,14 +5193,13 @@ function startWebhookServer() {
   const server = express();
   server.use(express.json());
   const handleWebhook = async (req, res, context = {}) => {
+    res.status(200).json({ success: true, received: true });
     try {
       await processWebhookReport(req.body, context);
       // Pass uploadId so the renderer only refreshes the affected section.
       sendStateUpdate({ uploadId: context.uploadId || null });
-      res.json({ received: true });
     } catch (error) {
       console.error("Webhook processing error", error);
-      res.status(500).json({ error: error.message || "failed" });
     }
   };
 
@@ -5108,6 +5218,12 @@ function startWebhookServer() {
     res.json({ ok: true });
   });
   server.post("/webhook", (req, res) => handleWebhook(req, res));
+  server.post("/webhook/msg91", (req, res) =>
+    handleWebhook(req, res, { webhookType: "msg91" }),
+  );
+  server.post("/webhook/msg91/callback", (req, res) =>
+    handleWebhook(req, res, { webhookType: "msg91_callback" }),
+  );
   server.post("/webhook/msg91/:templateName/:uploadId", (req, res) =>
     handleWebhook(req, res, {
       templateName: req.params.templateName,
@@ -5121,6 +5237,21 @@ function startWebhookServer() {
       webhookType: "outbound_report",
     }),
   );
+  server.all(/^\/webhook(?:\/.*)?$/, (req, res) => {
+    res.status(200).json({ success: true, received: true, fallback: true });
+  });
+  server.use((err, req, res, next) => {
+    if (res.headersSent) return next(err);
+    if (req.path && req.path.startsWith("/webhook")) {
+      console.error("Webhook request error", err);
+      return res.status(200).json({
+        success: true,
+        received: true,
+        error: err.message || "failed",
+      });
+    }
+    return next(err);
+  });
   return new Promise((resolve, reject) => {
     webhookServer = server
       .listen(webhookPort, "127.0.0.1", () => {
@@ -5878,6 +6009,12 @@ async function listSelectedUploadReportRows(filters = {}) {
       numberDeliveryStatus:
         mergedReply.deliveryStatus || row.deliveryStatus || "",
       numberRetryCount: row.retryCount || 0,
+      failureCode: row.failureCode || senderReport?.failureCode || "",
+      failureCategory:
+        row.failureCategory || senderReport?.failureCategory || "",
+      retryAfter: row.retryAfter || senderReport?.retryAfter || "",
+      retryBlockedReason:
+        row.retryBlockedReason || senderReport?.retryBlockedReason || "",
       sentMessage: getSentMessageForReport({
         ...row,
         csvRowData,
@@ -5889,7 +6026,12 @@ async function listSelectedUploadReportRows(filters = {}) {
       lastReplyAt: mergedReply.lastReplyAt || "",
       csvRowData,
       rawPayload: outboundPayload,
-      reason: row.validationError || senderReport?.reason || "",
+      reason:
+        row.retryBlockedReason ||
+        row.validationError ||
+        senderReport?.retryBlockedReason ||
+        senderReport?.reason ||
+        "",
       updatedAt: row.updatedAt || row.lastUpdated || "",
     };
 
@@ -7043,12 +7185,28 @@ ipcMain.handle("retry-failed", async (event, uploadId) => {
     );
   }
   const webhookBaseUrl = assertPublicWebhookConfigured();
-  const failedRows = await listNumbersByUpload(uploadId, {
+  let failedRows = await listNumbersByUpload(uploadId, {
     deliveryStatus: "failed",
-    projection: { id: 1, cleaned: 1, data: 1, retryCount: 1 },
+    projection: {
+      id: 1,
+      cleaned: 1,
+      data: 1,
+      retryCount: 1,
+      retryAfter: 1,
+      failureCategory: 1,
+      retryBlockedReason: 1,
+    },
   });
   if (!failedRows.length) {
     return { message: "No failed numbers to retry." };
+  }
+  const retryBlockedRows = failedRows.filter((row) => !isRetryAllowed(row));
+  failedRows = failedRows.filter((row) => isRetryAllowed(row));
+  if (!failedRows.length) {
+    return {
+      message: `${retryBlockedRows.length} failed row(s) are paused by WhatsApp healthy-ecosystem limits. Retry after the shown retry time or after customer engagement.`,
+      skipped: retryBlockedRows.length,
+    };
   }
   const webhookUrl = `${webhookBaseUrl}/webhook/msg91/${encodeURIComponent(template.name)}/${uploadId}`;
   const columnMapping = upload.templateMapping
@@ -7128,6 +7286,11 @@ ipcMain.handle("retry-failed", async (event, uploadId) => {
         messageId: rowMessageId,
         sentMessage,
         responseDetails: stringifyResponseDetails(responseDetails),
+        reason: "",
+        failureCode: "",
+        failureCategory: "",
+        retryAfter: "",
+        retryBlockedReason: "",
         lastUpdated: new Date().toISOString(),
       },
       { retryCount: 1 },
@@ -7147,6 +7310,11 @@ ipcMain.handle("retry-failed", async (event, uploadId) => {
       responseId: rowMessageId,
       messageId: rowMessageId,
       responseDetails,
+      reason: "",
+      failureCode: "",
+      failureCategory: "",
+      retryAfter: "",
+      retryBlockedReason: "",
       csvRowData: rowData,
       report: { retry: true, apiResponse: responseData },
     });
@@ -7179,7 +7347,9 @@ ipcMain.handle("retry-failed", async (event, uploadId) => {
   await updateUploadStatus(uploadId);
   sendStateUpdate();
   return {
-    message: "Retry request sent.",
+    message: retryBlockedRows.length
+      ? `Retry request sent. Skipped ${retryBlockedRows.length} row(s) paused by WhatsApp healthy-ecosystem limits.`
+      : "Retry request sent.",
     apiStatusCode: response.status,
     apiStatusText: response.statusText,
     apiMessageId,
@@ -7303,7 +7473,7 @@ app.whenReady().then(async () => {
   } catch (error) {
     console.error("Application startup failed:", error);
     dialog.showErrorBox(
-      "WhatsApp Bulk Sender startup failed",
+      "IPKWealth Communications   startup failed",
       error.message || "The local server could not be started.",
     );
     createWindow();

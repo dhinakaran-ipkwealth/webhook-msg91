@@ -105,6 +105,84 @@ function createStatusLabel(statusText) {
   return "reporting";
 }
 
+function getMsg91FailureCode(item = {}) {
+  const direct =
+    item.statusCode ||
+    item.status_code ||
+    item.errorCode ||
+    item.error_code ||
+    item.code ||
+    item.error?.code ||
+    item.errors?.[0]?.code ||
+    "";
+  const text = [
+    direct,
+    item.reason,
+    item.error?.message,
+    item.errors?.[0]?.message,
+    item.cleverTapErrorReason,
+    item.webEngangeErrorCode,
+    item.moEngageErrorCode,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const match = String(text).match(/\b(131049)\b/);
+  return match ? match[1] : direct ? String(direct) : "";
+}
+
+function getMsg91FailureReason(item = {}) {
+  return (
+    item.reason ||
+    item.error?.message ||
+    item.errors?.[0]?.message ||
+    item.cleverTapErrorReason ||
+    item.status ||
+    item.eventName ||
+    ""
+  );
+}
+
+function getMessageFailurePolicy(item = {}, status = "") {
+  const code = getMsg91FailureCode(item);
+  const reason = getMsg91FailureReason(item);
+  const haystack = `${code} ${reason}`.toLowerCase();
+  if (
+    code === "131049" ||
+    haystack.includes("healthy ecosystem engagement") ||
+    haystack.includes("healthy ecosystem")
+  ) {
+    const retryAfter = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    return {
+      failureCode: "131049",
+      failureCategory: "healthy_ecosystem",
+      retryAfter,
+      retryBlockedReason:
+        "WhatsApp limited this recipient for healthy ecosystem engagement. Retry after 24 hours or after the customer engages.",
+      reason:
+        reason ||
+        "This message was not delivered to maintain healthy ecosystem engagement.",
+    };
+  }
+
+  if (status === "failed" || reason || code) {
+    return {
+      failureCode: code,
+      failureCategory: code ? "provider_error" : "",
+      retryAfter: "",
+      retryBlockedReason: "",
+      reason,
+    };
+  }
+
+  return {
+    failureCode: "",
+    failureCategory: "",
+    retryAfter: "",
+    retryBlockedReason: "",
+    reason: "",
+  };
+}
+
 function getPayloadItems(body) {
   const parsedBody = parseMaybeJson(body);
   if (Array.isArray(parsedBody)) return parsedBody;
@@ -390,6 +468,9 @@ function normalizeWebhookItem(item, context = {}) {
 
   const text = extractMessageText(item) || null;
   const requestId = getMsg91CorrelationId(item, eventType);
+  const normalizedStatus =
+    eventType === "inbound" ? "inbound" : createStatusLabel(statusSource);
+  const failurePolicy = getMessageFailurePolicy(item, normalizedStatus);
 
   const receivedAt =
     item.ts ||
@@ -434,8 +515,7 @@ function normalizeWebhookItem(item, context = {}) {
     eventKey,
     stableKey,
     eventType,
-    normalizedStatus:
-      eventType === "inbound" ? "inbound" : createStatusLabel(statusSource),
+    normalizedStatus,
     normalizedMobile: normalizedMobile || null,
     text,
     requestId,
@@ -470,7 +550,11 @@ function normalizeWebhookItem(item, context = {}) {
     reaction: item.reaction || null,
     messages: item.messages || null,
     eventName: item.eventName || item.event_name || null,
-    reason: item.reason || null,
+    reason: failurePolicy.reason || item.reason || null,
+    failureCode: failurePolicy.failureCode || null,
+    failureCategory: failurePolicy.failureCategory || null,
+    retryAfter: failurePolicy.retryAfter || null,
+    retryBlockedReason: failurePolicy.retryBlockedReason || null,
     statusCode: item.statusCode || item.status_code || null,
     statusUpdatedAt: item.statusUpdatedAt || null,
     price: item.price || null,
@@ -845,6 +929,10 @@ async function applyOutboundStatusToReports(event) {
   const mobile = event.normalizedMobile;
   const status = event.normalizedStatus || "reporting";
   const now = new Date().toISOString();
+  const failurePolicy = getMessageFailurePolicy(
+    event.rawPayload || event,
+    status,
+  );
 
   const requestId = event.requestId;
   const senderReports = await getSenderReportsCollection(event.templateName);
@@ -892,6 +980,19 @@ async function applyOutboundStatusToReports(event) {
         currentStatus: status,
         deliveryStatus: status,
         reportWebhook: event,
+        reason: failurePolicy.reason,
+        failureCode: failurePolicy.failureCode,
+        failureCategory: failurePolicy.failureCategory,
+        retryAfter: failurePolicy.retryAfter,
+        retryBlockedReason: failurePolicy.retryBlockedReason,
+        report: {
+          ...(latestReport.report || {}),
+          status,
+          reason: failurePolicy.reason || event.reason || null,
+          failureCode: failurePolicy.failureCode || null,
+          failureCategory: failurePolicy.failureCategory || null,
+          retryAfter: failurePolicy.retryAfter || null,
+        },
         responseId: requestId || latestReport.responseId || null,
         messageId: requestId || latestReport.messageId || null,
         updatedAt: now,
@@ -909,6 +1010,11 @@ async function applyOutboundStatusToReports(event) {
           responseId: requestId || null,
           messageId: requestId || null,
           responseDetails: event,
+          reason: failurePolicy.reason,
+          failureCode: failurePolicy.failureCode,
+          failureCategory: failurePolicy.failureCategory,
+          retryAfter: failurePolicy.retryAfter,
+          retryBlockedReason: failurePolicy.retryBlockedReason,
           lastUpdated: now,
         },
       },

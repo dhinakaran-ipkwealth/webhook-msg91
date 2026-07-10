@@ -2470,6 +2470,10 @@ async function _doRefreshCustomReport() {
     const reasonBase = escapeHtml(
       row.reason || row.cleverTapErrorReason || "-",
     );
+    const retryAfterNote =
+      row.retryAfter && row.failureCategory === "healthy_ecosystem"
+        ? `<div class="small-note">Retry after: ${escapeHtml(displayDate(row.retryAfter))}</div>`
+        : "";
     const updatedNote = row.updatedAt
       ? `<div class="small-note">Updated: ${escapeHtml(displayDate(row.updatedAt))}</div>`
       : "";
@@ -2542,7 +2546,7 @@ async function _doRefreshCustomReport() {
       <td class="reply-time-cell" style="white-space:nowrap;">${escapeHtml(replyTimeText)}</td>
       <td>${templateHtml}</td>
       <td>${dynamicCellHtml}</td>
-      <td>${reasonBase}${updatedNote}</td>
+      <td>${reasonBase}${retryAfterNote}${updatedNote}</td>
     `;
 
     // If a row for this event already exists in the table, replace its contents; otherwise append
@@ -2700,6 +2704,10 @@ initWebhookInfo();
 attachJsonModalEvents();
 loadMsg91Config().then(() => {
   refreshDashboard();
-  setInterval(refreshDashboard, 10000);
+  setInterval(refreshDashboard, 5*60000);
 });
+
+setInterval(() => {
+  if (isWebhookDebugVisible()) refreshCustomReport();
+}, 5*60000);
 
