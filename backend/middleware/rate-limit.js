@@ -235,7 +235,7 @@ const webhookLimiter = RATE_LIMIT_ENABLED
           `[rate-limit] WEBHOOK-THROTTLED ${req.method} ${req.path} ip=${ip}`
         );
         if (res.headersSent) return;
-        res.status(200).json({ received: true, throttled: true });
+        res.status(200).json({ success: true, received: true, throttled: true });
         console.log(
           JSON.stringify({
             tag: "msg91-ack",

@@ -255,7 +255,7 @@ function webhookDedupMiddleware(getDb, opts = {}) {
 
       if (res.headersSent) return;
       if (returnAs200) {
-        res.status(200).json({ received: true, duplicate: true });
+        res.status(200).json({ success: true, received: true, duplicate: true });
         console.log(
           JSON.stringify({
             tag: "msg91-ack",

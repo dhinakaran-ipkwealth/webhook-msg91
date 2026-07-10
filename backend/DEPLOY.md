@@ -78,6 +78,10 @@ blindly):
 | `WEBHOOK_PUBLIC_BASE_URL` | `https://crm.ipkwealth.com` |
 | `WEBHOOK_PORT` / `PORT` | `3002` (must match the Nginx `proxy_pass` below) |
 | `WEBHOOK_HOST` | `0.0.0.0` |
+| `WEBHOOK_SECRET` / `MSG91_WEBHOOK_SECRET` | Optional shared secret checked against `X-Webhook-Secret` |
+| `MSG91_SIGNATURE_SECRET` / `MSG91_WEBHOOK_SIGNATURE_SECRET` | Optional HMAC SHA-256 signature secret |
+| `MSG91_WEBHOOK_SIGNATURE_HEADER` | Optional signature header name (default `x-msg91-signature`) |
+| `MSG91_IP_WHITELIST` / `WEBHOOK_TRUSTED_IPS` | Optional comma-separated client IP allowlist |
 | `MSG91_AUTH_KEY`, `MSG91_BASE_URL`, `MSG91_NAMESPACE_AGREEMENT`, `MSG91_NAMESPACE_SIGNED` | MSG91 API credentials |
 | `RATE_LIMIT_ENABLED`, `WEBHOOK_RATE_LIMIT`, `API_RATE_LIMIT`, `AUTH_RATE_LIMIT`, `GRAPHQL_RATE_LIMIT` | Rate limiting (safe defaults if unset) |
 | `REDIS_HOST`, `REDIS_PORT` | Shared rate-limit/dedup store (falls back to in-memory if unreachable) |
@@ -94,12 +98,12 @@ Add the routes from [`../nginx-msg91-webhook.conf`](../nginx-msg91-webhook.conf)
 inside the existing `crm.ipkwealth.com` server block (or `include` the file):
 
 ```nginx
-location = /webhook       { proxy_pass http://127.0.0.1:3002/webhook; proxy_http_version 1.1;
+location = /webhook       { auth_basic off; satisfy any; proxy_pass http://127.0.0.1:3002/webhook; proxy_http_version 1.1;
                              proxy_set_header Host $host;
                              proxy_set_header X-Real-IP $remote_addr;
                              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
                              proxy_set_header X-Forwarded-Proto $scheme; }
-location ^~ /webhook/     { proxy_pass http://127.0.0.1:3002; proxy_http_version 1.1;
+location ^~ /webhook/     { auth_basic off; satisfy any; proxy_pass http://127.0.0.1:3002; proxy_http_version 1.1;
                              proxy_set_header Host $host;
                              proxy_set_header X-Real-IP $remote_addr;
                              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -141,16 +145,21 @@ npm run pm2:save      # persists the current process list so it's restored on bo
 
 ```bash
 curl -s https://crm.ipkwealth.com/health
-curl -s -X POST https://crm.ipkwealth.com/webhook \
+curl -s -X POST https://crm.ipkwealth.com/webhook/msg91 \
   -H "Content-Type: application/json" \
-  -d '{"customerNumber":"919363406313","integratedNumber":"919363406313","contentType":"text","text":"Hi test","messages":"[{\"text\":{\"body\":\"Hi test\"},\"type\":\"text\"}]","ts":"2026-05-29T10:00:00+05:30"}'
+  --data-binary @tests/mock-msg91-payload.json
 ```
 
-Expect `{"ok":true, "mongoConnected":true, ...}` from `/health` and
-`{"received":true}` from `/webhook`. Then confirm the event landed in
+Expect `{"ok":true, "mongo": {"connected": true}, ...}` from `/health` and
+`{"received":true}` from `/webhook/msg91`. Then confirm the event landed in
 `msg91_webhooks.whatsapp_webhook_events` (Compass), and check
 `out_file`/`error_file` for a matching `"tag":"msg91-ack"` log line
 confirming a 200 was actually returned to MSG91.
+
+More test examples live in:
+
+- `tests/msg91-webhook-curl-examples.md`
+- `tests/msg91-webhook.postman_collection.json`
 
 MSG91 dashboard webhook config (URL + event types + custom parameters) is
 documented in [`../WEBHOOK_URLS_AND_SETUP.txt`](../WEBHOOK_URLS_AND_SETUP.txt) —

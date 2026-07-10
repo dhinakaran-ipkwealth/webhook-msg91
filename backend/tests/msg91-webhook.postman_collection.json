@@ -1,0 +1,77 @@
+{
+  "info": {
+    "name": "MSG91 Webhook Tests",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "https://crm.ipkwealth.com"
+    },
+    {
+      "key": "webhookSecret",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "POST /webhook/msg91",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/webhook/msg91",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "webhook",
+            "msg91"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"uuid\": \"mock-msg91-event-001\",\n  \"eventName\": \"delivered\",\n  \"webhookType\": \"msg91\",\n  \"customerNumber\": \"919000000000\",\n  \"integratedNumber\": \"919363406313\",\n  \"status\": \"delivered\",\n  \"messageId\": \"mock-message-id-001\",\n  \"oneApiRequestId\": \"mock-request-id-001\",\n  \"ts\": \"2026-07-10T10:00:00.000Z\"\n}"
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "POST /webhook/msg91/callback with optional secret",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "X-Webhook-Secret",
+            "value": "{{webhookSecret}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/webhook/msg91/callback",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "webhook",
+            "msg91",
+            "callback"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"uuid\": \"mock-msg91-event-002\",\n  \"eventName\": \"delivered\",\n  \"webhookType\": \"msg91_callback\",\n  \"customerNumber\": \"919000000000\",\n  \"status\": \"delivered\"\n}"
+        }
+      },
+      "response": []
+    }
+  ]
+}

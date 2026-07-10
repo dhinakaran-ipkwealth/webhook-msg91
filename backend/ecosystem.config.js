@@ -36,11 +36,21 @@ module.exports = {
       env: {
         NODE_ENV: "development",
         PORT: 3002,
+        WEBHOOK_HOST: "127.0.0.1",
       },
 
       env_production: {
         NODE_ENV: "production",
         PORT: 3002,
+        WEBHOOK_HOST: process.env.WEBHOOK_HOST || "0.0.0.0",
+        WEBHOOK_PUBLIC_BASE_URL: process.env.WEBHOOK_PUBLIC_BASE_URL || "https://crm.ipkwealth.com",
+        WEBHOOK_SECRET: process.env.WEBHOOK_SECRET,
+        MSG91_WEBHOOK_SECRET: process.env.MSG91_WEBHOOK_SECRET,
+        MSG91_SIGNATURE_SECRET: process.env.MSG91_SIGNATURE_SECRET,
+        MSG91_WEBHOOK_SIGNATURE_SECRET: process.env.MSG91_WEBHOOK_SIGNATURE_SECRET,
+        MSG91_WEBHOOK_SIGNATURE_HEADER: process.env.MSG91_WEBHOOK_SIGNATURE_HEADER,
+        MSG91_IP_WHITELIST: process.env.MSG91_IP_WHITELIST,
+        WEBHOOK_TRUSTED_IPS: process.env.WEBHOOK_TRUSTED_IPS,
 
         // MongoDB
         MONGODB_URI: process.env.MONGODB_URI,

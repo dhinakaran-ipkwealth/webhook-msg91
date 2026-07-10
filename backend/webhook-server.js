@@ -10,6 +10,8 @@ const { MongoClient } = require("mongodb");
 const requestLogger = require("./middleware/request-logger");
 const { webhookLimiter, apiLimiter, rateLimitStatus } = require("./middleware/rate-limit");
 const { webhookDedupMiddleware, ensureDedupIndexes } = require("./middleware/webhook-dedup");
+const { webhookAuthMiddleware } = require("./middleware/webhook-auth");
+const { createWebhookAuditLogger } = require("./middleware/webhook-audit");
 const { getMetricsSnapshot } = require("./middleware/request-logger");
 const {
   templateCollectionName,
@@ -34,6 +36,10 @@ if (!MONGODB_URI) {
 let mongoClient;
 let mongoDb;
 let webhookEventsDb;
+
+function captureRawBody(req, _res, buffer) {
+  req.rawBody = buffer ? buffer.toString("utf8") : "";
+}
 
 function parseMaybeJson(value) {
   if (value === undefined || value === null || value === "") return value;
@@ -581,6 +587,11 @@ async function initMongo() {
     },
   );
   await safeCreateIndex(webhookEvents, { modifiedAt: -1 });
+
+  const webhookLogs = mongoDb.collection("webhook_logs");
+  await safeCreateIndex(webhookLogs, { receivedAt: -1 });
+  await safeCreateIndex(webhookLogs, { method: 1, url: 1, receivedAt: -1 });
+  await safeCreateIndex(webhookLogs, { statusCode: 1, receivedAt: -1 });
 
   const senderReports = mongoDb.collection("whatsapp_sender_reports");
   await safeCreateIndex(senderReports, { mobile: 1, sentAt: -1 });
@@ -1149,7 +1160,7 @@ function ackMsg91Webhook(req, res, context = {}, extra = {}) {
     console.warn("[webhook] ackMsg91Webhook called but headers already sent");
     return;
   }
-  res.status(200).json({ received: true, ...extra });
+  res.status(200).json({ success: true, received: true, ...extra });
   logMsg91Ack(req, res, context, extra.fallback ? "fallback" : "ok");
 }
 
@@ -1182,16 +1193,55 @@ async function main() {
   app.use(requestLogger);
 
   // 2. Body parsers
-  app.use(express.json({ limit: "10mb" }));
-  app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+  app.use(express.json({ limit: "10mb", verify: captureRawBody }));
+  app.use(express.urlencoded({ extended: true, limit: "10mb", verify: captureRawBody }));
+
+  const webhookAuditLogger = createWebhookAuditLogger({ getDb: () => mongoDb });
+  app.use(/^\/webhook(?:\/.*)?$/, webhookAuditLogger);
 
   // ── health & metrics (NO rate limiting) ───────────────────────────────────
   app.get("/health", (req, res) => {
+    const rateLimit = rateLimitStatus();
+    const memory = process.memoryUsage();
     res.status(200).json({
       ok: true,
       service: SERVICE_NAME,
-      mongoConnected: Boolean(mongoDb),
-      ...rateLimitStatus(),
+      status: Boolean(mongoDb) ? "healthy" : "degraded",
+      mongo: {
+        connected: Boolean(mongoDb),
+        database: MONGODB_DB_NAME || "(default)",
+        webhookDatabase: MONGODB_WEBHOOK_DB_NAME || MONGODB_DB_NAME || "(default)",
+      },
+      redis: {
+        connected: Boolean(rateLimit.redisConnected),
+        store: rateLimit.store,
+      },
+      node: {
+        version: process.version,
+        env: process.env.NODE_ENV || "development",
+        pid: process.pid,
+      },
+      memory: {
+        rssMb: Math.round(memory.rss / 1024 / 1024),
+        heapUsedMb: Math.round(memory.heapUsed / 1024 / 1024),
+        heapTotalMb: Math.round(memory.heapTotal / 1024 / 1024),
+      },
+      uptimeSeconds: Math.floor(process.uptime()),
+      webhook: {
+        status: "ready",
+        routes: [
+          "POST /webhook",
+          "POST /webhook/msg91",
+          "POST /webhook/msg91/callback",
+          "POST /webhook/msg91/:sender",
+        ],
+        auth: {
+          secretHeaderConfigured: Boolean(process.env.WEBHOOK_SECRET || process.env.MSG91_WEBHOOK_SECRET),
+          signatureConfigured: Boolean(process.env.MSG91_SIGNATURE_SECRET || process.env.MSG91_WEBHOOK_SIGNATURE_SECRET),
+          ipWhitelistConfigured: Boolean(process.env.MSG91_IP_WHITELIST || process.env.WEBHOOK_TRUSTED_IPS),
+        },
+      },
+      rateLimit,
     });
   });
 
@@ -1221,7 +1271,7 @@ async function main() {
   //   1. webhookLimiter  — rate-limit (returns 200 + throttled:true if exceeded)
   //   2. dedupWebhook    — duplicate check (returns 200 + duplicate:true if seen)
   //   3. route handler   — normal processing
-  const webhookMiddleware = [webhookLimiter, dedupWebhook];
+  const webhookMiddleware = [webhookAuthMiddleware, webhookLimiter, dedupWebhook];
 
   // ── debug endpoint (public API rate limit, no dedup) ──────────────────────
   // Echo endpoint — POST any payload here to see exactly what arrives and how
@@ -1292,6 +1342,32 @@ async function main() {
     );
   });
 
+  app.post("/webhook/msg91", webhookMiddleware, async (req, res) => {
+    console.log(
+      `[webhook] POST /webhook/msg91 from ${req.ip} — body keys: ${Object.keys(req.body || {}).join(", ")}`,
+    );
+    ackMsg91Webhook(req, res, { webhookType: "msg91" });
+    processWebhookAfterAck(
+      req.body,
+      { webhookType: "msg91" },
+      { uploadId: null },
+      "MSG91 webhook",
+    );
+  });
+
+  app.post("/webhook/msg91/callback", webhookMiddleware, async (req, res) => {
+    console.log(
+      `[webhook] POST /webhook/msg91/callback from ${req.ip} — body keys: ${Object.keys(req.body || {}).join(", ")}`,
+    );
+    ackMsg91Webhook(req, res, { webhookType: "msg91_callback" });
+    processWebhookAfterAck(
+      req.body,
+      { webhookType: "msg91_callback" },
+      { uploadId: null },
+      "MSG91 callback webhook",
+    );
+  });
+
   app.post("/webhook/msg91/inbound", webhookMiddleware, async (req, res) => {
     console.log(
       `[webhook] POST /webhook/msg91/inbound from ${req.ip} — body keys: ${Object.keys(req.body || {}).join(", ")}`,
@@ -1355,7 +1431,7 @@ async function main() {
 
   // Fallback — catches any /webhook/* pattern not matched above.
   // Apply webhook rate-limit + dedup here too.
-  app.all(/^\/webhook(?:\/.*)?$/, webhookLimiter, dedupWebhook, (req, res) => {
+  app.all(/^\/webhook(?:\/.*)?$/, webhookAuthMiddleware, webhookLimiter, dedupWebhook, (req, res) => {
     console.log(
       `[webhook] ${req.method} ${req.originalUrl} from ${req.ip} matched fallback`,
     );

@@ -1,0 +1,11 @@
+{
+  "uuid": "mock-msg91-event-001",
+  "eventName": "delivered",
+  "webhookType": "msg91",
+  "customerNumber": "919000000000",
+  "integratedNumber": "919363406313",
+  "status": "delivered",
+  "messageId": "mock-message-id-001",
+  "oneApiRequestId": "mock-request-id-001",
+  "ts": "2026-07-10T10:00:00.000Z"
+}
