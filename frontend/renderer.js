@@ -2177,15 +2177,6 @@ function getFriendlyStatus(row) {
   return row.normalizedStatus || "In progress";
 }
 
-function getMatchedMessageStatus(row) {
-  const parts = [];
-  if (row.numberCurrentStatus)
-    parts.push(`Message: ${row.numberCurrentStatus}`);
-  if (row.numberDeliveryStatus)
-    parts.push(`Delivery: ${row.numberDeliveryStatus}`);
-  return parts.join("\n") || "-";
-}
-
 function getSentDeliveryStatus(row) {
   return (
     row.numberDeliveryStatus ||
@@ -2352,12 +2343,12 @@ function renderCustomSummary(rows) {
       note: "Inbound customer reply messages captured from MSG91.",
       tone: "reply",
     },
-    {
+    /* {
       label: "Delivery Pending",
       value: counts.pending,
       note: "Sent to MSG91, waiting for delivered/read/failed callback.",
       tone: "pending",
-    },
+    }, */
     {
       label: "Failed/Tech Issues",
       value: counts.failed,
@@ -2549,7 +2540,6 @@ async function _doRefreshCustomReport(options = {}) {
       <td>${messageSummaryHtml}</td>
       <td>${typeHtml}</td>
       <td class="status-cell">${statusHtml}</td>
-      <td class="status-detail-cell">${escapeHtml(getMatchedMessageStatus(row))}</td>
       <td>${escapeHtml(row.uploadFileName || "-")}</td>
       <td class="reply-time-cell" style="white-space:nowrap;">${escapeHtml(replyTimeText)}</td>
       <td>${templateHtml}</td>
