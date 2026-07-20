@@ -2656,8 +2656,6 @@ async function listCustomReportRowsFromMongo(filters = {}) {
   if (filters.status && filters.status !== "all") {
     if (filters.status === "inbound") {
       query.eventType = "inbound";
-    } else if (filters.eventType !== "inbound") {
-      query.normalizedStatus = filters.status;
     }
   }
   if (!(filters.templateName && filters.templateName !== "all")) {
@@ -2808,6 +2806,7 @@ async function listCustomReportRowsFromMongo(filters = {}) {
 
   return rows.filter(
     (row) =>
+      reportRowMatchesStatus(row, filters) &&
       reportRowMatchesSearch(row, filters.search) &&
       reportRowMatchesDateRange(row, filters),
   );
@@ -2982,17 +2981,7 @@ async function listSenderReportRowsForCustomReport(filters = {}) {
       return false;
     }
 
-    if (filters.status && filters.status !== "all") {
-      if (filters.status === "inbound") {
-        if (!(row.customReply || row.lastReplyAt)) return false;
-      } else if (
-        row.normalizedStatus !== filters.status &&
-        row.numberDeliveryStatus !== filters.status &&
-        row.numberCurrentStatus !== filters.status
-      ) {
-        return false;
-      }
-    }
+    if (!reportRowMatchesStatus(row, filters)) return false;
 
     return (
       reportRowMatchesSearch(row, filters.search) &&
@@ -5070,6 +5059,7 @@ function getPdfSummaryHtml(rows, options = {}) {
   // failure - so Delivered + Pending + Failed always reconciles exactly to
   // Total Customers / Sent Records.
   const pendingCount = outboundRows.length - deliveredCount - failedCount;
+  const failedOrPendingCount = failedCount + pendingCount;
 
   const summaryRows = [
     ["Report type", options.reportType || "IPK Wealth Communications"],
@@ -5078,8 +5068,7 @@ function getPdfSummaryHtml(rows, options = {}) {
     ["Unique Customer Mobiles", String(uniqueCustomers)],
     ["Delivered", String(deliveredCount)],
     ["Customer Replies", String(replyCount)],
-    ["Awaiting Delivery Update", String(pendingCount)],
-    ["Failed / Technical Issues", String(failedCount)],
+    ["Failed / Technical Issues", `${failedOrPendingCount} (Failed: ${failedCount}, Pending delivery: ${pendingCount})`],
   ];
 
   return `<table class="summary-table"><tbody>${summaryRows
@@ -5336,7 +5325,7 @@ function generatePdfFromRows(rows, filenamePrefix, isMultiSection = false, filte
       "Delivery Status": getDeliveryStatusLinesForReport(row),
       "Customer Reply": getReceivedMessageForReport(row),
       "Reply Time": getReportReplyTime(row),
-      "Request ID":
+      "Transaction ID":
         row.requestId ||
         row.oneApiRequestId ||
         row.replyMsgId ||
@@ -6044,6 +6033,68 @@ function normalizeReportStatus(row) {
   return status || "reporting";
 }
 
+function getReportStatusText(row = {}) {
+  const raw = parseJsonField(row.rawPayload, row.rawPayload || {});
+  return [
+    row.normalizedStatus,
+    row.deliveryStatus,
+    row.numberDeliveryStatus,
+    row.numberCurrentStatus,
+    row.currentStatus,
+    raw.normalizedStatus,
+    raw.deliveryStatus,
+    raw.delivery_status,
+    raw.status,
+    raw.statusCode,
+    raw.eventName,
+    raw["Delivery Report"],
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function reportRowMatchesStatus(row, filters = {}) {
+  const selectedStatus = String(filters.status || "all").toLowerCase();
+  if (!selectedStatus || selectedStatus === "all") return true;
+
+  if (selectedStatus === "inbound") {
+    return Boolean(row.eventType === "inbound" || row.customReply || row.lastReplyAt);
+  }
+
+  const status = getReportStatusText(row);
+  if (selectedStatus === "delivered") {
+    return (
+      status.includes("deliver") ||
+      status.includes("read") ||
+      status.includes("success")
+    );
+  }
+  if (selectedStatus === "failed") {
+    return (
+      status.includes("fail") ||
+      status.includes("deny") ||
+      status.includes("rejected") ||
+      status.includes("undelivered") ||
+      status.includes("error") ||
+      status.includes("invalid")
+    );
+  }
+  if (selectedStatus === "sent") {
+    return status.includes("sent") || status.includes("submitted");
+  }
+  if (selectedStatus === "pending") {
+    return (
+      !status ||
+      status.includes("pending") ||
+      status.includes("reporting") ||
+      status.includes("queued")
+    );
+  }
+
+  return status.includes(selectedStatus);
+}
+
 function reportRowMatchesSearch(row, search) {
   const needle = String(search || "")
     .trim()
@@ -6302,17 +6353,7 @@ async function listSelectedUploadReportRows(filters = {}) {
         return false;
       }
 
-      if (filters.status && filters.status !== "all") {
-        if (filters.status === "inbound") {
-          if (!(row.customReply || row.lastReplyAt)) return false;
-        } else if (
-          row.normalizedStatus !== filters.status &&
-          row.numberDeliveryStatus !== filters.status &&
-          row.numberCurrentStatus !== filters.status
-        ) {
-          return false;
-        }
-      }
+      if (!reportRowMatchesStatus(row, filters)) return false;
 
       return (
         reportRowMatchesSearch(row, filters.search) &&
@@ -6870,7 +6911,7 @@ function formatSingleRowForExcel(row, index) {
     Upload: row.uploadFileName || "",
     "Customer Reply": row.customReply || "",
     "Reply Time": getReportReplyTime(row),
-    "Request ID":
+    "Transaction ID":
       row.requestId || row.oneApiRequestId || row.replyMsgId || row.uuid || "",
     "Template Name": getTemplateLabelForReport(row),
     Campaign: row.campaignName || "",
@@ -6945,15 +6986,19 @@ function generateExcelFromRows(rows, filenamePrefix, isMultiSheet = false) {
 }
 
 async function exportCustomReport(filters = {}) {
-  const rows = await getCustomReportRows(filters);
+  const { rowsSnapshot, ...effectiveFilters } = filters || {};
+  let rows = await getCustomReportRows(effectiveFilters);
+  if (!rows.length && Array.isArray(rowsSnapshot) && rowsSnapshot.length) {
+    rows = rowsSnapshot;
+  }
   if (!rows.length) {
     throw new Error("No webhook report rows to export.");
   }
   return generatePdfFromRows(
     rows,
-    buildCustomReportPdfFileName(filters, rows),
-    !filters.uploadId,
-    filters,
+    buildCustomReportPdfFileName(effectiveFilters, rows),
+    !effectiveFilters.uploadId,
+    effectiveFilters,
   );
 }
 

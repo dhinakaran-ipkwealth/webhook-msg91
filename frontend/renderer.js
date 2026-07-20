@@ -2269,16 +2269,15 @@ function formatPercent(value, total) {
 }
 
 function renderCustomSummary(rows) {
-  // Use one consistent basis for the dashboard:
-  // outbound rows are the sent customer records in this report. MSG91 delivery
-  // status cards below are mutually exclusive and must reconcile to this total.
-  // Customer replies are shown separately as acknowledgement evidence because
-  // a reply can overlap with a sent/delivered/pending status.
-  const outboundRows = rows.filter((row) => row.eventType !== "inbound");
+  const selectedRows = Array.isArray(rows) ? rows : [];
+  // Use the currently selected/visible rows as the dashboard basis. Delivery
+  // buckets are calculated only from sent records; customer replies remain a
+  // separate acknowledgement count because replies can overlap delivery status.
+  const outboundRows = selectedRows.filter((row) => row.eventType !== "inbound");
   const uniqueCustomers = new Set(
-    outboundRows.map(getCustomerKey).filter(Boolean),
+    selectedRows.map(getCustomerKey).filter(Boolean),
   );
-  const replyEvents = rows.reduce(
+  const replyEvents = selectedRows.reduce(
     (total, row) => total + countReplyMessages(row),
     0,
   );
@@ -2310,26 +2309,29 @@ function renderCustomSummary(rows) {
   // failure - covers "sent"/"queued"/blank status - so Delivered + Pending +
   // Failed always reconciles exactly to Total Customers / Sent Records.
   const pending = outboundRows.length - delivered - failed;
+  const failedOrPending = failed + pending;
 
   const counts = {
-    total: outboundRows.length,
+    total: selectedRows.length,
+    sentRecords: outboundRows.length,
     uniqueCustomers: uniqueCustomers.size,
     replyEvents,
     delivered,
     pending,
     failed,
+    failedOrPending,
   };
 
   const cards = [
     {
       label: "Total Customers",
-      value: counts.total,
-      note: "Base count for this report. Delivered + Pending + Failed equals this number.",
+      value: counts.uniqueCustomers || counts.total,
+      note: `${counts.total} selected row(s), ${counts.sentRecords} sent record(s).`,
     },
     {
-      label: "Unique Customers",
-      value: counts.uniqueCustomers,
-      note: "Distinct customer mobile numbers in the same sent records.",
+      label: "Selected Records",
+      value: counts.total,
+      note: "Rows matching the selected sender, template, date, type, status, and search options.",
     },
     {
       label: "Delivered",
@@ -2351,8 +2353,8 @@ function renderCustomSummary(rows) {
     }, */
     {
       label: "Failed/Tech Issues",
-      value: counts.failed,
-      note: "MSG91 reported failed, rejected, denied, error, or undelivered.",
+      value: counts.failedOrPending,
+      note: `Failed/tech: ${counts.failed}. Pending delivery: ${counts.pending}.`,
       tone: "bad",
     },
   ];
@@ -2672,9 +2674,10 @@ async function exportCustomReportPdf() {
   }
 
   try {
-    const result = await window.electronAPI.exportCustomReport(
-      getCustomReportFilters(),
-    );
+    const result = await window.electronAPI.exportCustomReport({
+      ...getCustomReportFilters(),
+      rowsSnapshot: lastCustomReportRows,
+    });
     showAlert(
       `Webhook PDF report exported with ${result.rowCount} rows:\n${result.filePath}`,
       "success",
