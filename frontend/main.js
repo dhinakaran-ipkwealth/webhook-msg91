@@ -5,7 +5,8 @@ const {
   Menu,
   Tray,
   ipcMain,
-  nativeImage, session,
+  nativeImage,
+  session,
 } = require("electron");
 const path = require("path");
 const fs = require("fs");
@@ -23,6 +24,10 @@ try {
 }
 // const { ipcMain } = require("electron");
 
+const APP_NAME = "IPKWealth Communications";
+const APP_ICON_FILE = "webhook_msg91_512.ico";
+const APP_LOGO_FILE = "ipk-wealth-logo.png";
+
 // Development (`npm start`) must not share the installed app's profile/cache or
 // single-instance lock. If the packaged app is already running in the tray, a
 // shared profile causes "Unable to move the cache: Access is denied" and the
@@ -31,8 +36,14 @@ if (!app.isPackaged) {
   const devUserDataPath =
     process.env.ELECTRON_USER_DATA_DIR ||
     path.join(app.getPath("appData"), "webhook-msg91-dev");
-  app.setName("Webhook MSG91 Dev");
+  app.setName(`${APP_NAME} Dev`);
   app.setPath("userData", devUserDataPath);
+} else {
+  app.setName(APP_NAME);
+}
+
+if (process.platform === "win32") {
+  app.setAppUserModelId("com.ipkwealth.communications");
 }
 
 
@@ -54,6 +65,21 @@ function getExternalConfigPaths(fileName) {
     process.execPath ? path.join(path.dirname(process.execPath), fileName) : "",
   ].filter(Boolean);
   return [...new Set(paths)];
+}
+
+function getAssetPath(fileName) {
+  return getExternalConfigPaths(path.join("assets", fileName)).find((candidate) =>
+    fs.existsSync(candidate),
+  );
+}
+
+function getAppIconPath() {
+  return (
+    getAssetPath(APP_ICON_FILE) ||
+    getAssetPath("webhook_msg91.ico") ||
+    getAssetPath("favicon.png") ||
+    null
+  );
 }
 
 // Populate process.env from .env file immediately on startup
@@ -472,7 +498,7 @@ const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
 if (!gotSingleInstanceLock) {
   console.warn(
-    "Another Webhook MSG91 instance is already running. Exiting this launch.",
+    `Another ${APP_NAME} instance is already running. Exiting this launch.`,
   );
   app.quit();
 }
@@ -1765,14 +1791,17 @@ function showMainWindow() {
 function createTray() {
   if (tray) return;
 
-  const trayIcon = nativeImage.createFromDataURL(
-    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAMklEQVR4AWMYmWH8z0ABYBxVSFUBCzAqmkGNgYGBYVQ0gHqgGmDUBHKAaRV5AVgDAFTSDxHizHctAAAAAElFTkSuQmCC",
-  );
+  const iconPath = getAppIconPath();
+  const trayIcon = iconPath
+    ? nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 })
+    : nativeImage.createFromDataURL(
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAMklEQVR4AWMYmWH8z0ABYBxVSFUBCzAqmkGNgYGBYVQ0gHqgGmDUBHKAaRV5AVgDAFTSDxHizHctAAAAAElFTkSuQmCC",
+      );
   tray = new Tray(trayIcon);
-  tray.setToolTip("IPKWealth Communications   server is running");
+  tray.setToolTip(`${APP_NAME} server is running`);
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: "Open IPKWealth Communications  ", click: showMainWindow },
+      { label: `Open ${APP_NAME}`, click: showMainWindow },
       {
         label: `Webhook: http://127.0.0.1:${webhookPort}/webhook`,
         enabled: false,
@@ -1805,9 +1834,11 @@ function createWindow() {
   }
 
   mainWindow = new BrowserWindow({
+    title: APP_NAME,
     width: 1100,
     height: 850,
     show: true,
+    icon: getAppIconPath() || undefined,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -4993,7 +5024,10 @@ function htmlEscapeForPdf(value) {
 
 function getLogoDataUri() {
   try {
-    const logoPath = path.join(__dirname, "assets", "webhook_msg91_512.png");
+    const logoPath =
+      getAssetPath(APP_LOGO_FILE) ||
+      getAssetPath("webhook_msg91_512.png");
+    if (!logoPath) return null;
     const imageData = fs.readFileSync(logoPath);
     return `data:image/png;base64,${imageData.toString("base64")}`;
   } catch (err) {
@@ -5089,11 +5123,11 @@ function buildPdfHtmlDocument(title, summaryHtml, rowsHtml) {
 <style>
   * { box-sizing: border-box; }
   body { font-family: Helvetica, Arial, sans-serif; margin: 18px; color: #222; font-size: 9px; }
-  .header { display: flex; align-items: center; margin-bottom: 14px; }
-  .logo { width: 60px; height: auto; margin-right: 12px; }
-  .header-text { display: flex; flex-direction: column; }
-  .company-name { margin: 0; font-size: 20px; letter-spacing: 0; color: #0c3d91; }
-  .company-tagline { margin: 2px 0 0; font-size: 9px; color: #555; }
+  .header { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 14px; border-bottom: 2px solid #0c3d91; padding-bottom: 10px; }
+  .logo { width: 188px; height: auto; object-fit: contain; }
+  .header-text { text-align: right; display: flex; flex-direction: column; }
+  .company-name { margin: 0; font-size: 18px; letter-spacing: 0; color: #0c3d91; }
+  .company-tagline { margin: 3px 0 0; font-size: 9px; color: #555; }
   h1, h2 { margin: 0 0 12px 0; font-weight: 600; }
   h1 { font-size: 16px; }
   h2 { font-size: 13px; margin-top: 18px; }
@@ -5126,8 +5160,8 @@ function buildPdfHtmlDocument(title, summaryHtml, rowsHtml) {
   <div class="header">
     ${logoData ? `<img class="logo" src="${logoData}" alt="IPK Wealth Logo" />` : ""}
     <div class="header-text">
-      <p class="company-name">IPK Wealth</p>
-      <p class="company-tagline">Making Wealth For Generations</p>
+      <p class="company-name">IPK Wealth Communications</p>
+      <p class="company-tagline">MSG91 WhatsApp Delivery and Reply Report</p>
     </div>
   </div>
   <h1>${htmlEscapeForPdf(title)}</h1>

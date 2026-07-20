@@ -3,7 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>MSG91 Webhook Console</title>
+    <title>IPKWealth Communications</title>
+    <link rel="icon" href="./assets/favicon.png" />
     <style>
       :root {
         --font-sans: Helvetica, Arial, sans-serif;
@@ -107,6 +108,25 @@
         margin-bottom: 18px;
       }
 
+      .app-title-lockup {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        min-width: 0;
+      }
+
+      .app-header-logo {
+        width: 178px;
+        max-width: 34vw;
+        height: auto;
+        object-fit: contain;
+        flex: 0 0 auto;
+      }
+
+      .app-title-text {
+        min-width: 0;
+      }
+
       h1, h2, h3, h4, p { margin-top: 0; }
 
       h1 { margin-bottom: 4px; font-size: 26px; }
@@ -157,6 +177,16 @@
       }
 
       .top-header-status { max-width: 560px; }
+
+      .sidebar-logo {
+        width: 118px;
+        height: auto;
+        object-fit: contain;
+        display: block;
+        background: #fff;
+        border-radius: 6px;
+        padding: 4px 6px;
+      }
 
       .section {
         background: var(--panel);
@@ -547,7 +577,7 @@
     <div id="saasAlertContainer"></div>
     <div class="app-layout">
       <aside class="sidebar">
-        <div class="sidebar-brand"><span class="brand-mark">IPK</span><span>IPKWealth Communications</span></div>
+        <div class="sidebar-brand"><img class="sidebar-logo" src="./assets/ipk-wealth-logo.png" alt="IPK Wealth" /><span>Communications</span></div>
         <nav class="nav-menu">
           <button class="nav-item active" data-target="tab-dashboard">Dashboard</button>
           <button class="nav-item" data-target="tab-upload">Upload & Send</button>
@@ -561,9 +591,12 @@
 
       <main class="main-content">
         <header class="top-header">
-          <div>
-            <h1>IPKWealth Communications  </h1>
-            <p class="small-note">Local Electron UI backed by MongoDB and the EC2 PM2 MSG91 webhook service.</p>
+          <div class="app-title-lockup">
+            <img class="app-header-logo" src="./assets/ipk-wealth-logo.png" alt="IPK Wealth" />
+            <div class="app-title-text">
+              <h1>IPKWealth Communications</h1>
+              <p class="small-note">Local Electron UI backed by MongoDB and the EC2 PM2 MSG91 webhook service.</p>
+            </div>
           </div>
           <div id="configStatus" class="top-header-status">Checking MSG91 and MongoDB configuration...</div>
         </header>
